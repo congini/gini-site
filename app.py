@@ -21,6 +21,12 @@ pages = [
         url_path="gini-dashboard",
     ),
     st.Page(
+        "pages/Live_Leaderboard.py",
+        title="Live Leaderboard",
+        icon="📈",
+        url_path="live-leaderboard",
+    ),
+    st.Page(
         "pages/Super_Square.py",
         title="Super Square",
         icon="🏆",

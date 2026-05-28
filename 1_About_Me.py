@@ -123,7 +123,7 @@ st.markdown(
         .about-page {{
             max-width: 1500px;
             margin: 0 auto;
-            padding: 0 1.5rem 3rem 1.5rem;
+            padding: 0 clamp(0.75rem, 2vw, 1.5rem) 3rem clamp(0.75rem, 2vw, 1.5rem);
         }}
 
         .fade-slide {{
@@ -162,7 +162,8 @@ st.markdown(
             box-shadow: 0 22px 45px rgba(0, 0, 0, 0.18);
             overflow: hidden;
             border: 1px solid rgba(255,255,255,0.13);
-            height: 340px;
+            min-height: 340px;
+            height: auto;
             display: flex;
             flex-direction: column;
             justify-content: center;
@@ -199,7 +200,7 @@ st.markdown(
         }}
 
         .hero-title {{
-            font-size: 2.65rem;
+            font-size: clamp(2rem, 4.2vw, 2.65rem);
             line-height: 1.05;
             font-weight: 900;
             margin-bottom: 1rem;
@@ -243,7 +244,7 @@ st.markdown(
             font-weight: 750;
         }}
 
-                .headshot-card {{
+        .headshot-card {{
             position: relative;
             border-radius: 22px;
             background: #ffffff;
@@ -251,7 +252,7 @@ st.markdown(
             box-shadow: 0 18px 42px rgba(0, 0, 0, 0.13);
             padding: 0.75rem;
             overflow: hidden;
-            height: 340px;
+            height: clamp(280px, 42vw, 340px);
             box-sizing: border-box;
         }}
 
@@ -569,9 +570,40 @@ st.markdown(
             .hero-card {{
                 padding: 2.1rem;
             }}
+        }}
 
-            .hero-title {{
-                font-size: 2.2rem;
+        @media screen and (max-width: 640px) {{
+            .about-page {{
+                margin-top: -0.8rem !important;
+            }}
+
+            .hero-card {{
+                min-height: 0;
+                padding: 1.45rem;
+                border-radius: 16px;
+            }}
+
+            .hero-text,
+            .hero-statement {{
+                font-size: 0.94rem;
+                line-height: 1.58;
+            }}
+
+            .headshot-card {{
+                height: 300px;
+                border-radius: 16px;
+            }}
+
+            .quick-facts-grid {{
+                grid-template-columns: 1fr;
+            }}
+
+            .about-card,
+            .context-text,
+            .core-card,
+            .estat-feature {{
+                padding: 1.1rem 1.15rem;
+                border-radius: 14px;
             }}
         }}
     </style>
@@ -611,6 +643,18 @@ st.markdown(
 
         .section-title {
             margin-top: 1rem !important;
+        }
+
+        @media screen and (max-width: 640px) {
+            .about-page {
+                margin-top: -0.75rem !important;
+            }
+
+            .hero-grid,
+            .hero-card,
+            .headshot-card {
+                margin-top: 0 !important;
+            }
         }
     </style>
     """,

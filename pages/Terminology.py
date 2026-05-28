@@ -1,4 +1,4 @@
-﻿import html
+import html
 
 import streamlit as st
 from pathlib import Path
@@ -70,229 +70,81 @@ def render_section(title, intro, entries):
         render_entry(entry)
 
 
-current_dashboard_entries = [
-    {
-        "name": "Gini Metric",
-        "meaning": "The dashboard's main team-quality score. It summarizes how well a team performed across the major areas that tend to decide football games: offense, defense, scoreboard control, consistency, turnovers, penalties, and schedule context.",
-        "reading": "Around 100 is roughly average for that season. Higher scores point to stronger overall performance after accounting for the league environment in that season.",
-    },
-    {
-        "name": "Model Weights",
-        "meaning": "The controls inside the Customize Model Weights panel that let users test different football philosophies, such as valuing offense more, defense more, or schedule difficulty more.",
-        "reading": "Changing the sliders changes the custom rankings on the page, but it does not change the underlying game data.",
-    },
-    {
-        "name": "Team Profile",
-        "meaning": "The summary panel in the dashboard hero that shows the currently selected season and full team name.",
-        "reading": "Use this as the quick confirmation of which team-season view is active before reading the rankings, charts, and tables below.",
-    },
-    {
-        "name": "Dashboard Setup",
-        "meaning": "The control area below the hero where users select the team and season shown throughout the dashboard.",
-        "reading": "The team dropdown uses full team names. The season dropdown changes the year, and both controls update the dashboard view.",
-    },
-    {
-        "name": "Score Scale",
-        "meaning": "The dashboard uses different public scales depending on what is being shown. Season ratings are centered around league average, weekly Game EStat is shown on a cleaner display scale, and schedule strength is treated as context.",
-        "reading": "For season ratings, around 100 means roughly average for that season and higher is better. For weekly Game EStat, around 100 or better is a strong game. For Schedule Strength, higher means tougher opponents rather than a better team.",
-    },
-    {
-        "name": "Selected-Team Gini Card",
-        "meaning": "The main score card for the team selected in the dashboard controls.",
-        "reading": "The badge combines the team's selected-season rank with how far its Gini score sits above or below that season's Gini average.",
-    },
-    {
-        "name": "Schedule Difficulty",
-        "meaning": "The top-card view of how difficult the selected team's schedule was.",
-        "reading": "Higher means a tougher schedule. It is context for the team's results, not a team-quality grade by itself.",
-    },
-    {
-        "name": "Team Balance",
-        "meaning": "A quick deep-dive label that compares the selected team's offensive and defensive ranks.",
-        "reading": "Two-Way means both units are strong. Balanced means offense and defense are close in rank. Offense-Led or Defense-Led points to the stronger side.",
-    },
-    {
-        "name": "Custom EStat",
-        "meaning": "The season-level team rating produced by the current model weight settings.",
-        "reading": "It uses the same general season-rating scale as the main Gini Metric: around 100 is roughly average for that season, and higher is better.",
-    },
-    {
-        "name": "Default EStat",
-        "meaning": "The prebuilt season-level score saved with the dashboard data. It gives every team a consistent baseline before any user changes the model weight sliders.",
-        "reading": "Use Default EStat as the baseline season view. Around 100 is roughly average for that season. Use Custom EStat when you want the rankings based on your selected weights.",
-    },
-    {
-        "name": "Overall Rankings Table",
-        "meaning": "The full 1-32 team table in the Overall Rankings tab. It shows every team, while the selected team is outlined in the active team colors.",
-        "reading": "When possible, the table opens with the selected team around the fifth visible row, but users can still scroll through the full league table.",
-    },
-    {
-        "name": "Super Square",
-        "meaning": "A historical Super Bowl contender zone built from regular-season team data. A team is inside the Super Square when it ranks top 6 in Gini Score, top 6 in point differential per game, and has at least one top-12 unit on offense or defense.",
-        "reading": "Inside the square means the team matched the dashboard's strongest historical contender profile for that season. It is a signal, not a prediction guarantee.",
-    },
-    {
-        "name": "On the Cusp",
-        "meaning": "A Super Square label for teams that are close to the contender zone but do not meet all of the inside-square requirements.",
-        "reading": "Cusp teams usually have a strong partial profile, such as being near the top in Gini Score or point differential, but they are missing at least one part of the full Super Square filter.",
-    },
-    {
-        "name": "Reveal Super Bowl Winner",
-        "meaning": "The optional Super Square checkbox that visually identifies the team that won the Super Bowl after the selected regular season.",
-        "reading": "Turning it on helps compare the champion against the Super Square zone for that season without changing the chart's filtering rules.",
-    },
-    {
-        "name": "Offense EStat",
-        "meaning": "A season-relative offensive score that reflects how much value a team's offense created while considering the defenses it faced.",
-        "reading": "Around 100 is roughly average for that season. Higher means the offense was stronger than average for its season context.",
-    },
-    {
-        "name": "Defense EStat",
-        "meaning": "A season-relative defensive score that reflects how well a defense limited opponents while considering the offenses it faced.",
-        "reading": "Around 100 is roughly average for that season. Higher means better defensive performance in the dashboard's scoring direction.",
-    },
-    {
-        "name": "Season Standardization",
-        "meaning": "A context step that compares teams to the league environment they actually played in before showing them on the dashboard scale.",
-        "reading": "This helps compare teams across years without pretending every NFL season had the same scoring environment.",
-    },
-    {
-        "name": "Game EStat",
-        "meaning": "A game-level performance score that looks beyond the final score by evaluating how well a team played underneath the result.",
-        "reading": "Weekly Game EStat is shown on a cleaner 70-based display scale. Higher scores point to stronger all-around games, while scores around 100 or better should read as strong weekly performances.",
-    },
-    {
-        "name": "Matchup-Adjusted Game EStat",
-        "meaning": "An optional weekly view that gives extra context for the strength of the opponent in that game.",
-        "reading": "It stays on the same 70-based display scale as regular Game EStat and adds a small opponent-strength adjustment so the matchup effect can be compared directly.",
-    },
+gini_dashboard_entries = [
+    {"name": "Gini Metric", "meaning": "The main team-quality score on the Gini Dashboard. It blends offense, defense, point differential, consistency, turnovers, penalties, and schedule context into one season-relative rating.", "reading": "Around 100 is roughly average for that season. Higher means the team graded better in the selected model view."},
+    {"name": "Custom EStat", "meaning": "The Gini score recalculated from the current Customize Model Weights sliders.", "reading": "Use this when you want the rankings to reflect your football philosophy, such as heavier offense, defense, or schedule emphasis."},
+    {"name": "Default EStat", "meaning": "The stored baseline EStat that comes from the prepared season data before user slider changes.", "reading": "Use it as the consistent baseline score. Custom EStat is the interactive version."},
+    {"name": "Offense EStat", "meaning": "A season-relative offensive score built from opponent-adjusted offensive performance.", "reading": "Higher is better. It shows whether the offense created more value than the league average in that season."},
+    {"name": "Defense EStat", "meaning": "A season-relative defensive score built so stronger defense points upward on the dashboard scale.", "reading": "Higher is better. It rewards defenses that limit opponent value after context is applied."},
+    {"name": "Game EStat", "meaning": "A game-level performance score that combines efficiency, consistency, turnovers, penalties, and game control.", "reading": "The dashboard displays it on a cleaner weekly scale. Higher numbers mean stronger single-game performance."},
+    {"name": "Matchup-Adjusted Game EStat", "meaning": "A Game EStat view that gives extra context for opponent strength.", "reading": "Use it to see whether a weekly performance should be read differently because of the opponent."},
+    {"name": "Schedule Strength", "meaning": "A measure of how difficult a team's opponents were.", "reading": "Higher means a tougher schedule. It is context, not a direct team-quality grade."},
+    {"name": "Strength of Schedule Rank", "meaning": "The league rank of schedule difficulty in the selected season.", "reading": "Rank 1 means the hardest schedule. Larger numbers mean easier relative schedule paths."},
+    {"name": "Success Margin", "meaning": "A consistency measure comparing a team's offensive success rate to what it allowed on defense.", "reading": "Positive values usually mean the team was more reliable play to play than its opponent."},
+    {"name": "EPA", "meaning": "Expected Points Added estimates whether a play improved or hurt expected scoring value.", "reading": "Positive offensive EPA is good. For defense, allowing less EPA is better, and dashboard scores are oriented so stronger defense reads higher."},
+    {"name": "Opponent-Adjusted EPA", "meaning": "EPA interpreted through the quality of the opponent faced.", "reading": "It helps separate strong production against a strong opponent from similar production against a weaker one."},
+    {"name": "Turnover Margin", "meaning": "The possession swing created by takeaways versus giveaways.", "reading": "Positive is generally good because the team gained more possession value than it lost."},
+    {"name": "Penalty Yard Margin", "meaning": "The field-position swing created by penalty yards.", "reading": "Positive usually means the opponent gave away more penalty yardage than the selected team did."},
 ]
 
 
-game_level_entries = [
-    {
-        "name": "EPA",
-        "meaning": "Expected Points Added estimates whether a play improved or hurt a team's scoring outlook.",
-        "reading": "Positive offensive EPA is good for the offense. Lower EPA allowed is generally better for a defense.",
-    },
-    {
-        "name": "Offensive EPA per Play",
-        "meaning": "A per-play view of how much value the offense creates when it has the ball.",
-        "reading": "Higher usually points to a more efficient offense.",
-    },
-    {
-        "name": "Defensive EPA Allowed per Play",
-        "meaning": "A per-play view of how much value the defense allows opposing offenses to create.",
-        "reading": "Lower raw values are better, while dashboard-adjusted defensive scores are oriented so higher is better.",
-    },
-    {
-        "name": "Opponent-Adjusted Offensive EPA",
-        "meaning": "An offensive efficiency measure that gives context for the quality of the defense faced.",
-        "reading": "Strong production against a strong defense is treated differently than similar production against a weak defense.",
-    },
-    {
-        "name": "Opponent-Adjusted Defensive EPA",
-        "meaning": "A defensive efficiency measure that gives context for the quality of the offense faced.",
-        "reading": "It rewards defenses for limiting offenses that usually create more value.",
-    },
-    {
-        "name": "Success Rate",
-        "meaning": "The share of plays that keep a team on schedule based on down, distance, and game situation.",
-        "reading": "It is a consistency measure, not just an explosiveness measure.",
-    },
-    {
-        "name": "Defensive Success Rate Allowed",
-        "meaning": "How often the defense allows the opposing offense to stay on schedule.",
-        "reading": "Lower is better because it means the defense is creating more difficult situations.",
-    },
-    {
-        "name": "Success Margin",
-        "meaning": "A comparison of a team's offensive consistency against the consistency it allowed on defense.",
-        "reading": "Positive values generally mean the team controlled the game more reliably from play to play.",
-    },
-    {
-        "name": "Point Differential",
-        "meaning": "How much a team won or lost by in a game.",
-        "reading": "It is important, but it can be noisy without efficiency and opponent context.",
-    },
-    {
-        "name": "Turnover Margin",
-        "meaning": "Whether a team gained or lost extra possessions through takeaways and giveaways.",
-        "reading": "Positive is generally good because it means the team created more possession value.",
-    },
-    {
-        "name": "Penalty Yard Margin",
-        "meaning": "Whether penalties created a field-position advantage or disadvantage.",
-        "reading": "Positive is generally good because the opponent gave away more penalty yardage.",
-    },
-    {
-        "name": "Pass Rate",
-        "meaning": "How often a team chooses or is forced into passing relative to its offensive play mix.",
-        "reading": "It helps describe offensive identity, game script, and style rather than pure team quality.",
-    },
+live_leaderboard_entries = [
+    {"name": "Live Market Score", "meaning": "The Live Leaderboard's current-moment team rating. It combines current Gini profile, roster score, projected wins, and Super Square-style profile probability.", "reading": "Higher means the team currently looks stronger in the live market-style ranking."},
+    {"name": "Current Gini Score", "meaning": "The performance foundation used by the Live Leaderboard for the selected current season.", "reading": "It anchors the live rating in football performance before roster and projection layers are added."},
+    {"name": "Performance Score", "meaning": "A normalized score that translates the team's Gini profile into the live leaderboard blend.", "reading": "Higher means the team's performance profile is helping its live rank."},
+    {"name": "Roster Score", "meaning": "A live roster-strength layer using available roster, depth, production, availability, and player-context signals.", "reading": "Higher means the roster layer is lifting the team's current outlook."},
+    {"name": "Projected Wins", "meaning": "The current win projection used by the Live Leaderboard.", "reading": "Use it as a directional outlook, not a guarantee. It helps translate team quality into expected season result."},
+    {"name": "Projected Wins Range", "meaning": "The lower-to-upper band around projected wins.", "reading": "A wider band means more uncertainty. A narrow band means the model sees a more stable outlook."},
+    {"name": "Quadrant Probability", "meaning": "The probability that a team fits one of the four predictive profile buckets.", "reading": "Higher Q3 or Q4 probability points toward a stronger playoff or contender profile."},
+    {"name": "Current Best", "meaning": "The best-ranked or strongest live profile at the current refresh.", "reading": "Use it to see who leads the board right now, not who led a previous saved week."},
+    {"name": "Current Worst", "meaning": "The weakest live profile at the current refresh.", "reading": "Use it to see who is currently at the bottom of the market-style board."},
+    {"name": "Riser of the Week", "meaning": "A team moving up relative to the most recent saved or rolling live snapshot.", "reading": "It highlights movement, not just absolute strength."},
+    {"name": "Faller of the Week", "meaning": "A team moving down relative to the most recent saved or rolling live snapshot.", "reading": "It flags teams whose current live profile has softened."},
+    {"name": "Snapshot", "meaning": "A saved copy of the leaderboard at a point in time.", "reading": "Snapshots let the page compare current rank and score to a prior board."},
+    {"name": "Weekly History", "meaning": "The once-per-football-period archive stored in live_leaderboard_weekly_history.csv.", "reading": "It should grow only when a weekly snapshot is due, not on every five-minute refresh."},
+    {"name": "Live Source Refresh", "meaning": "The process of rereading local source files and optional nflverse cache files.", "reading": "Refresh updates the page view from local data. It does not automatically mean a new weekly history row was saved."},
+    {"name": "nflreadpy / nflverse Source Files", "meaning": "Free nflverse data files that can be cached locally through nflreadpy.", "reading": "They support refreshed schedules, weekly rosters, injuries, transactions, snap counts, and player production when available."},
+    {"name": "Injuries, Weekly Rosters, Snap Counts, Schedules, Draft Picks, Contracts, Depth Charts", "meaning": "Roster and context files that can strengthen the live roster layer over time.", "reading": "More complete source files make the live roster score more current and less dependent on proxy signals."},
 ]
 
 
-season_level_entries = [
-    {
-        "name": "Point Differential per Game",
-        "meaning": "A season-level view of scoring margin adjusted to a game-by-game lens.",
-        "reading": "Higher usually reflects stronger scoreboard control across the season.",
-    },
-    {
-        "name": "Turnover Margin per Game",
-        "meaning": "A season-level view of possession advantage adjusted to a game-by-game lens.",
-        "reading": "It can explain why a team's record differs from its efficiency profile.",
-    },
-    {
-        "name": "Penalty Yard Margin per Game",
-        "meaning": "A season-level view of penalty-field-position advantage adjusted to a game-by-game lens.",
-        "reading": "It adds discipline and hidden-yardage context without overpowering the core efficiency metrics.",
-    },
-    {
-        "name": "Yards per Play",
-        "meaning": "A basic offensive efficiency stat that shows how much yardage a team gains on a typical play.",
-        "reading": "It is useful context, but EPA-based metrics usually capture game value more directly.",
-    },
-    {
-        "name": "Schedule Strength",
-        "meaning": "A season-level view of how difficult a team's opponents were.",
-        "reading": "Higher means the team faced a tougher set of opponents. It is a context score, not a direct team-quality grade.",
-    },
-    {
-        "name": "Strength of Schedule Rank",
-        "meaning": "A rank of schedule difficulty across the league for the selected season.",
-        "reading": "A top schedule rank means the team faced one of the hardest schedules.",
-    },
-    {
-        "name": "Overall Rank, Offense Rank, Defense Rank",
-        "meaning": "Season-relative placements for overall team quality, offensive performance, and defensive performance.",
-        "reading": "Rank 1 is best. Ties may share the same placement.",
-    },
+super_square_entries = [
+    {"name": "Super Square", "meaning": "A championship-contender profile tool built from historical regular-season team patterns.", "reading": "Inside the square means the team matched the historical profile gates. It is a signal, not a Super Bowl guarantee."},
+    {"name": "Championship Profile", "meaning": "The combined set of traits that past champions tended to show before the playoffs.", "reading": "Teams that match more of the profile look more like historical contenders."},
+    {"name": "Control Profile", "meaning": "The broad team-control side of Super Square: scoreboard control, Gini/EStat checkpoints, success margin, and EPA strength.", "reading": "A higher control score means the team looked more stable and complete."},
+    {"name": "Unit Pressure", "meaning": "The unit-strength side of Super Square, focused on whether a team had a strong enough offense or defense to pressure opponents.", "reading": "A high unit pressure score means at least one side of the ball looked championship-caliber."},
+    {"name": "Q1, Q2, Q3, Q4", "meaning": "Four profile buckets ranging from non-contender shapes to Super Bowl contender shapes.", "reading": "Q4 is strongest. Q1 is weakest. Q2 and Q3 sit in the middle tiers."},
+    {"name": "Q4 Super Bowl Contender", "meaning": "The strongest quadrant profile on the Super Square page.", "reading": "A Q4 team has the closest regular-season shape to high-end contender patterns."},
+    {"name": "Super Square Requirements", "meaning": "The specific gates a team must clear to be considered inside the Super Square.", "reading": "Requirements are learned from historical champion floors and then applied to every team-season."},
+    {"name": "Cusp Teams", "meaning": "Teams that come close to the Super Square profile but do not fully clear every gate.", "reading": "Cusp teams are worth watching, but they are not officially inside the square."},
+    {"name": "Gini Rank", "meaning": "A team's rank by the Super Square Gini/EStat profile within its season.", "reading": "Lower rank numbers are stronger. Rank 1 is best."},
+    {"name": "Point Differential Rank", "meaning": "A team's season rank by scoring margin.", "reading": "Strong point differential usually supports the control-profile side."},
+    {"name": "Success Rank", "meaning": "A team's rank by consistency and success-margin signals.", "reading": "A strong rank means the team won more plays and situations, not only final scores."},
+    {"name": "EPA Differential", "meaning": "The gap between value created by the offense and value allowed by the defense.", "reading": "Positive or high differential points to stronger underlying team quality."},
+    {"name": "Best Unit", "meaning": "The stronger side of the ball for a team, usually offense or defense.", "reading": "Super Square uses this to judge whether the team had a pressure point that could carry into postseason football."},
+    {"name": "Historical Champion Pattern", "meaning": "The common statistical shape found across past Super Bowl champions.", "reading": "It helps compare current teams to proven championship paths without treating history as destiny."},
 ]
 
 
-context_entries = [
-    {
-        "name": "Schedule Fields",
-        "meaning": "Game metadata such as week, date, teams, scores, venue, roof, surface, and timing.",
-        "reading": "These fields help users understand the environment around each result.",
-    },
-    {
-        "name": "Betting Market Fields",
-        "meaning": "Market context such as spread, total, and moneyline information carried in the schedule file.",
-        "reading": "These fields are useful for future analysis but are not presented as core public model ingredients.",
-    },
-    {
-        "name": "Rest and Division Fields",
-        "meaning": "Context about rest timing and whether a game was played inside the division.",
-        "reading": "These fields can support future matchup analysis.",
-    },
-    {
-        "name": "Roster Fields",
-        "meaning": "Player and team roster attributes such as season, team, position, player name, jersey, status, body profile, college, and draft background.",
-        "reading": "The roster page is season-level context, not an exact active-roster snapshot for every game day.",
-    },
+predictive_model_entries = [
+    {"name": "Regular Season Predictor", "meaning": "The tool that uses completed prior-year team profiles to forecast regular-season wins.", "reading": "It is designed for season outlooks, not single-game picks."},
+    {"name": "Prediction Target Year", "meaning": "The season being projected.", "reading": "If the target is 2026, the model is estimating the 2026 regular-season result."},
+    {"name": "Feature Year", "meaning": "The completed season used as the input profile for the forecast.", "reading": "For a 2026 projection, the feature year is usually 2025."},
+    {"name": "Projected Wins", "meaning": "The model's central win estimate.", "reading": "Read it as the middle of the forecast, not an exact prediction."},
+    {"name": "Likely Range", "meaning": "The win band around the projection using model error.", "reading": "It shows a reasonable high-low expectation based on backtest misses."},
+    {"name": "Model Result", "meaning": "The plain-language comparison between projection and actual or current pace.", "reading": "It tells whether the team is tracking above, below, or near the forecast."},
+    {"name": "Actual Wins", "meaning": "The real wins recorded for the target season once games are available.", "reading": "Use it to judge how the projection is aging as the season progresses or after it ends."},
+    {"name": "Win Pace", "meaning": "The current record scaled to a full regular season.", "reading": "Useful during an unfinished season because actual wins are not final yet."},
+    {"name": "Expected Wins / Pythagorean Wins", "meaning": "A scoreboard-based estimate of how many games a team probably should have won from its points scored and allowed.", "reading": "It helps spot teams whose record may be stronger or weaker than their point profile."},
+    {"name": "Wins Above Expected", "meaning": "Actual wins minus expected or Pythagorean wins.", "reading": "Large positive values can suggest regression risk. Large negative values can suggest improvement potential."},
+    {"name": "Regression Risk", "meaning": "A label for teams whose prior record may have been better than their underlying profile.", "reading": "It warns that the next season could be tougher than the record alone implies."},
+    {"name": "Improvement Candidate", "meaning": "A label for teams whose underlying profile looked better than their record.", "reading": "It flags teams that may rebound if close-game or scoring luck normalizes."},
+    {"name": "Rolling Backtest", "meaning": "A time-aware test where older seasons train the model and later seasons test it.", "reading": "It avoids testing the model on information it would not have known yet."},
+    {"name": "MAE", "meaning": "Mean Absolute Error, or the average miss in wins.", "reading": "Lower MAE means the model missed by fewer wins on average."},
+    {"name": "Playoffs Predictor", "meaning": "The postseason tool that evaluates completed regular-season playoff profiles.", "reading": "It is separate from the regular-season predictor and focuses on playoff wins/outlook."},
+    {"name": "Postseason Lock", "meaning": "The rule that keeps the playoff predictor closed until the regular season is complete.", "reading": "It prevents the tool from mixing current-year playoff forecasting with incomplete regular-season data."},
+    {"name": "Projected Playoff Wins", "meaning": "The playoff model's central estimate of postseason wins.", "reading": "It is capped to the realistic playoff range and should be read as an outlook, not a bracket guarantee."},
+    {"name": "Chance of a Playoff Win", "meaning": "The estimated chance a playoff team wins at least one postseason game.", "reading": "Higher values mean the model sees a stronger chance of advancing beyond a playoff appearance."},
 ]
 
 
@@ -416,7 +268,7 @@ st.markdown(
 }}
 
 .terminology-title {{
-    font-size: 2.55rem;
+    font-size: clamp(2.05rem, 5vw, 2.55rem);
     line-height: 1.05;
     font-weight: 950;
     margin-bottom: 0.9rem;
@@ -556,12 +408,15 @@ st.markdown(
 }}
 
 @media screen and (max-width: 900px) {{
-    .terminology-hero {{
-        padding: 2rem;
+    .terminology-page {{
+        margin-top: -0.75rem;
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
     }}
 
-    .terminology-title {{
-        font-size: 2.05rem;
+    .terminology-hero {{
+        padding: 1.35rem;
+        border-radius: 16px;
     }}
 
     .term-body,
@@ -582,52 +437,53 @@ st.markdown('<div class="terminology-page">', unsafe_allow_html=True)
 st.markdown(
     """
 <div class="terminology-hero">
-    <div class="terminology-kicker">Gini Metric Documentation</div>
+    <div class="terminology-kicker">Platform Documentation</div>
     <div class="terminology-title">Terminology</div>
     <div class="terminology-text">
-        A public-facing guide to the stats, labels, and football concepts used throughout the dashboard.
-        This page explains what each term means and how to read it in the context of the dashboard.
+        A page-by-page guide to the stats, labels, and football concepts used across the site.
+        Each tab explains the language for one tool so users can read the numbers without needing
+        to know the underlying spreadsheets first.
     </div>
 </div>
 """,
     unsafe_allow_html=True,
 )
 
-tab_current, tab_game, tab_season, tab_context = st.tabs(
+tab_gini, tab_live, tab_square, tab_predictive = st.tabs(
     [
-        "Current Model",
-        "Game Stats",
-        "Season Stats",
-        "Context",
+        "Gini Dashboard",
+        "Live Leaderboard",
+        "Super Square",
+        "Predictive Model",
     ]
 )
 
-with tab_current:
+with tab_gini:
     render_section(
-        "Current Dashboard Terms",
-        "The public labels and scoring concepts used in the current Gini Metric experience.",
-        current_dashboard_entries,
+        "Gini Dashboard Terms",
+        "Terms used by the main team evaluation page: rankings, EStat scores, weekly game view, schedule context, and the model-weight controls.",
+        gini_dashboard_entries,
     )
 
-with tab_game:
+with tab_live:
     render_section(
-        "Game-Level Stats",
-        "Terms from play-by-play data that power the weekly chart, game log, and team deep dive.",
-        game_level_entries,
+        "Live Leaderboard Terms",
+        "Terms used by the current-moment page: Live Market Score, roster strength, projected wins, movement, snapshots, and refreshed local source files.",
+        live_leaderboard_entries,
     )
 
-with tab_season:
+with tab_square:
     render_section(
-        "Season-Level Stats",
-        "Team-season aggregates used for rankings, top cards, deep-dive cards, and schedule context.",
-        season_level_entries,
+        "Super Square Terms",
+        "Terms used by the championship-profile page: contender quadrants, control profile, unit pressure, historical champion patterns, and cusp teams.",
+        super_square_entries,
     )
 
-with tab_context:
+with tab_predictive:
     render_section(
-        "Schedule, Market, and Roster Context",
-        "Supporting fields that help explain game environments, team context, and future analysis options.",
-        context_entries,
+        "Predictive Model Terms",
+        "Terms used by the forecasting page: regular-season projections, feature years, likely ranges, backtests, regression labels, and playoff predictor locks.",
+        predictive_model_entries,
     )
 
 st.markdown("</div>", unsafe_allow_html=True)

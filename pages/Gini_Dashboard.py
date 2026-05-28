@@ -3,7 +3,6 @@ from io import BytesIO
 import base64
 import html
 import sys
-import uuid
 
 import pandas as pd
 import plotly.express as px
@@ -26,6 +25,9 @@ if str(APP_DIR) not in sys.path:
     sys.path.append(str(APP_DIR))
 
 from site_nav import render_top_nav
+
+BRONCOS_LOGO_PATH = APP_DIR / "assets" / "broncos_logo_centered.png"
+BRONCOS_LOGO_SOURCE = str(BRONCOS_LOGO_PATH)
 
 TEAM_THEME_OVERRIDES = {
     "ARI": {"primary": "#97233F", "secondary": "#000000"},
@@ -179,10 +181,10 @@ def get_team_theme(team, team_assets):
     if team in TEAM_THEME_OVERRIDES:
         primary = TEAM_THEME_OVERRIDES[team]["primary"]
         secondary = TEAM_THEME_OVERRIDES[team]["secondary"]
-        logo = ""
+        logo = BRONCOS_LOGO_SOURCE if team == "DEN" else ""
         if not team_assets.empty and "team_abbr" in team_assets.columns:
             match = team_assets[team_assets["team_abbr"] == team]
-            if not match.empty:
+            if not match.empty and team != "DEN":
                 logo = match.iloc[0].get("team_logo_espn", "")
         return {
             "primary": primary,
@@ -267,14 +269,21 @@ def get_team_record(team_game_df, season, team):
 
 @st.cache_data(show_spinner=False)
 def logo_url_to_data_uri(url, grayscale=False):
-    if not isinstance(url, str) or not url.startswith("http"):
+    if not isinstance(url, str) or not url:
         return ""
 
     try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-
-        image = Image.open(BytesIO(response.content)).convert("RGBA")
+        if url.startswith("http"):
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            image = Image.open(BytesIO(response.content)).convert("RGBA")
+        else:
+            path = Path(url)
+            if not path.is_absolute():
+                path = APP_DIR / path
+            if not path.exists():
+                return ""
+            image = Image.open(path).convert("RGBA")
 
         if grayscale:
             alpha = image.getchannel("A")
@@ -368,50 +377,6 @@ def apply_schedule_z_score(season_df):
     return season_df
 
 
-def format_table(df, fmt=None):
-    display_df = df.copy()
-    if fmt:
-        for column, format_string in fmt.items():
-            if column in display_df.columns:
-                display_df[column] = display_df[column].apply(
-                    lambda value: format_string.format(value) if pd.notna(value) else "-"
-                )
-    return display_df
-
-
-def format_whole_number(value):
-    numeric_value = pd.to_numeric(value, errors="coerce")
-    if pd.isna(numeric_value):
-        return "-"
-    return f"{int(numeric_value)}"
-
-
-def dataframe_to_html_table(df, highlight_column=None, highlight_value=None):
-    header_html = "".join(
-        f"<th>{html.escape(str(column))}</th>" for column in df.columns
-    )
-    rows_html = []
-
-    highlight_mask = pd.Series(False, index=df.index)
-    if highlight_column in df.columns:
-        highlight_mask = df[highlight_column].astype(str) == str(highlight_value)
-
-    for row_index, row in df.iterrows():
-        row_class = ' class="selected-team-row"' if bool(highlight_mask.loc[row_index]) else ""
-        cells_html = "".join(
-            f"<td>{html.escape(str(value)) if pd.notna(value) else '-'}</td>"
-            for value in row
-        )
-        rows_html.append(f"<tr{row_class}>{cells_html}</tr>")
-
-    return (
-        '<table border="1" class="dataframe clean-table">'
-        f"<thead><tr>{header_html}</tr></thead>"
-        f"<tbody>{''.join(rows_html)}</tbody>"
-        "</table>"
-    )
-
-
 def show_clean_table(
     df,
     fmt=None,
@@ -420,206 +385,265 @@ def show_clean_table(
     top_margin_px=8,
     highlight_column=None,
     highlight_value=None,
+    highlight_color=None,
     scroll_to_highlight=False,
     scroll_offset_rows=4,
 ):
-    table_id = f"clean-table-{uuid.uuid4().hex}"
-    table_class = f"clean-table-wrap {extra_class}".strip()
-    extra_margin_css = (
-        f".clean-table-outer.{extra_class} {{ margin-top: {top_margin_px}px !important; }}"
-        if extra_class
-        else ""
+    display_df = df.copy()
+    column_config = {}
+
+    if fmt:
+        for column, format_string in fmt.items():
+            if column not in display_df.columns:
+                continue
+
+            numeric_values = pd.to_numeric(display_df[column], errors="coerce")
+            if numeric_values.notna().any():
+                if "%" in format_string:
+                    display_df[column] = numeric_values * 100
+                    decimals = 1 if ".1" in format_string else 0
+                    column_config[column] = st.column_config.NumberColumn(
+                        column,
+                        format=f"%.{decimals}f%%",
+                    )
+                else:
+                    display_df[column] = numeric_values
+                    decimals = 3 if ".3" in format_string else 2 if ".2" in format_string else 1 if ".1" in format_string else 0
+                    column_config[column] = st.column_config.NumberColumn(
+                        column,
+                        format=f"%.{decimals}f",
+                    )
+
+    if top_margin_px != 8:
+        st.markdown(f"<div style='margin-top:{top_margin_px}px;'></div>", unsafe_allow_html=True)
+
+    table_data = display_df
+    if highlight_column in display_df.columns and highlight_value is not None:
+        highlight_hex = highlight_color or "#F15A24"
+
+        def highlight_selected_row(row):
+            is_selected = str(row.get(highlight_column, "")).strip() == str(highlight_value).strip()
+            if not is_selected:
+                return [""] * len(row)
+            return [
+                (
+                    f"background-color: {highlight_hex}1A; "
+                    f"font-weight: 800; "
+                    f"color: #111827;"
+                )
+                for _ in row
+            ]
+
+        table_data = display_df.style.apply(highlight_selected_row, axis=1)
+
+    st.dataframe(
+        table_data,
+        hide_index=True,
+        use_container_width=True,
+        height=max_height,
+        column_config=column_config,
     )
 
-    table_html = dataframe_to_html_table(
-        format_table(df, fmt),
-        highlight_column=highlight_column,
-        highlight_value=highlight_value,
-    )
 
-    st.markdown(
-        f"""
+def render_scrollable_rankings_table(
+    df,
+    fmt,
+    selected_team,
+    primary_color,
+    secondary_color,
+    max_height=420,
+    scroll_offset_rows=5,
+):
+    display_df = df.copy()
+    raw_df = df.copy()
+    column_meta = {}
+
+    for column in display_df.columns:
+        format_string = fmt.get(column) if fmt else None
+        numeric_values = pd.to_numeric(display_df[column], errors="coerce")
+        is_numeric = numeric_values.notna().any()
+        column_meta[column] = {"is_numeric": is_numeric}
+
+        if not format_string or not is_numeric:
+            continue
+
+        if "%" in format_string:
+            display_df[column] = numeric_values * 100
+            decimals = 1 if ".1" in format_string else 0
+            display_df[column] = display_df[column].map(
+                lambda value: "-" if pd.isna(value) else f"{value:.{decimals}f}%"
+            )
+        else:
+            decimals = 3 if ".3" in format_string else 2 if ".2" in format_string else 1 if ".1" in format_string else 0
+            display_df[column] = numeric_values.map(
+                lambda value: "-" if pd.isna(value) else f"{value:.{decimals}f}"
+            )
+
+    table_id = f"gini-rankings-{selected_team.lower()}"
+    header_cells = []
+    for column in display_df.columns:
+        data_type = "number" if column_meta[column]["is_numeric"] else "text"
+        header_cells.append(
+            f'<th data-type="{data_type}" scope="col">{html.escape(str(column))}<span class="sort-mark"></span></th>'
+        )
+
+    body_rows = []
+    for _, row in display_df.iterrows():
+        raw_row = raw_df.loc[row.name] if row.name in raw_df.index else row
+        is_selected = str(raw_row.get("Team", "")).strip() == str(selected_team).strip()
+        row_class = " selected-row" if is_selected else ""
+        selected_attr = ' data-selected="true"' if is_selected else ""
+        cells = []
+        for column in display_df.columns:
+            raw_value = raw_row.get(column, "")
+            display_value = row.get(column, "")
+            if pd.isna(display_value):
+                display_value = "-"
+            numeric_value = pd.to_numeric(raw_value, errors="coerce")
+            sort_value = (
+                str(float(numeric_value))
+                if column_meta[column]["is_numeric"] and pd.notna(numeric_value)
+                else str(display_value)
+            )
+            align_class = " number-cell" if column_meta[column]["is_numeric"] else ""
+            cells.append(
+                f'<td class="{align_class}" data-sort="{html.escape(sort_value)}">{html.escape(str(display_value))}</td>'
+            )
+        body_rows.append(f'<tr class="{row_class}"{selected_attr}>{"".join(cells)}</tr>')
+
+    table_html = f"""
+<div id="{table_id}" class="rankings-shell">
+  <div class="rankings-scroll">
+    <table class="rankings-table">
+      <thead><tr>{"".join(header_cells)}</tr></thead>
+      <tbody>{"".join(body_rows)}</tbody>
+    </table>
+  </div>
+</div>
 <style>
-.clean-table-outer {{
-    border: 1px solid #D9DEE7;
-    border-radius: 10px;
-    overflow: hidden;
-    margin-top: 8px;
-    background: #FFFFFF !important;
-    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
-}}
-
-.clean-table-wrap {{
-    overflow-x: auto;
-    overflow-y: auto;
-    max-height: {max_height}px;
-    background: #FFFFFF !important;
-    position: relative;
-    isolation: isolate;
-    overscroll-behavior: contain;
-}}
-
-.clean-table {{
+  #{table_id} {{
+    font-family: "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: #111827;
+  }}
+  #{table_id} .rankings-scroll {{
+    height: {int(max_height)}px;
+    overflow: auto;
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    border-radius: 12px;
+    background: #FFFFFF;
+    box-shadow: 0 8px 22px rgba(15, 23, 42, 0.055);
+  }}
+  #{table_id} .rankings-table {{
     width: 100%;
     border-collapse: separate;
     border-spacing: 0;
-    font-size: 14px;
-    color: #111827;
-    background: #FFFFFF !important;
-}}
-
-.clean-table thead {{
-    background: #F8FAFC !important;
+    font-size: 0.875rem;
+  }}
+  #{table_id} th {{
     position: sticky;
     top: 0;
-    z-index: 200;
-}}
-
-.clean-table thead th {{
-    position: sticky;
-    top: 0;
-    z-index: 210;
-    background: #F8FAFC !important;
-    background-color: #F8FAFC !important;
-    background-clip: padding-box;
-    color: #111827;
-    font-weight: 700;
+    z-index: 2;
+    background: #F8FAFC;
+    color: #475569;
     text-align: left;
-    padding: 10px 12px;
-    border-right: 1px solid #E5E7EB;
-    border-bottom: 1px solid #E5E7EB;
-    box-shadow:
-        inset 0 -3px 0 0 {selected_team_color},
-        0 -10px 0 10px #F8FAFC,
-        0 6px 10px rgba(248, 250, 252, 0.96);
+    font-size: 0.72rem;
+    line-height: 1.15;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 0.62rem 0.68rem;
+    border-bottom: 1px solid rgba(15, 23, 42, 0.14);
+    cursor: pointer;
     white-space: nowrap;
-}}
-
-.clean-table tbody {{
-    background: #FFFFFF !important;
-}}
-
-.clean-table tbody tr {{
-    background-color: #FFFFFF !important;
-}}
-
-.clean-table tbody tr:nth-child(even) {{
-    background-color: #F8FAFC !important;
-}}
-
-.clean-table tbody td {{
-    padding: 9px 12px;
-    border-right: 1px solid #E5E7EB;
-    border-bottom: 1px solid #E5E7EB;
+  }}
+  #{table_id} th:hover {{
+    color: {primary_color};
+    background: #FFFFFF;
+  }}
+  #{table_id} th[data-sort-dir="asc"] .sort-mark::after {{
+    content: " ^";
+  }}
+  #{table_id} th[data-sort-dir="desc"] .sort-mark::after {{
+    content: " v";
+  }}
+  #{table_id} td {{
+    padding: 0.57rem 0.68rem;
+    border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+    background: #FFFFFF;
     white-space: nowrap;
-    color: #111827;
-    background-color: inherit !important;
-}}
-
-.clean-table tbody tr:hover {{
-    background-color: #EEF2F7 !important;
-}}
-
-.clean-table tbody tr.selected-team-row td {{
-    background-color: inherit !important;
-    border-top: 2px solid {selected_team_color};
-    border-bottom: 2px solid {selected_team_color2};
-}}
-
-.clean-table tbody tr.selected-team-row td:first-child {{
-    border-left: 4px solid {selected_team_color};
-}}
-
-.clean-table tbody tr.selected-team-row td:last-child {{
-    border-right: 2px solid {selected_team_color2};
-}}
-
-/* Schedule tables are short, so do not use sticky headers or scrolling.
-   This prevents row text from bleeding under the header and removes the extra bottom space. */
-.clean-table-outer.schedule-table {{
-    display: inline-block !important;
-    width: 100% !important;
-    height: auto !important;
-    margin-bottom: 0 !important;
-}}
-
-.clean-table-outer.schedule-table .clean-table-wrap {{
-    overflow-x: visible !important;
-    overflow-y: visible !important;
-    max-height: none !important;
-    height: auto !important;
-    display: block !important;
-}}
-
-.clean-table-outer.schedule-table .clean-table {{
-    margin-bottom: 0 !important;
-}}
-
-.clean-table-outer.schedule-table .clean-table thead {{
-    position: static !important;
-    top: auto !important;
-    z-index: auto !important;
-}}
-
-.clean-table-outer.schedule-table .clean-table thead th {{
-    position: static !important;
-    top: auto !important;
-    z-index: auto !important;
-}}
-
-{extra_margin_css}
+    font-weight: 600;
+    line-height: 1.22;
+  }}
+  #{table_id} .number-cell {{
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }}
+  #{table_id} tbody tr:hover td {{
+    background: #F8FAFC;
+  }}
+  #{table_id} tbody tr.selected-row td {{
+    background: {primary_color}14;
+    border-top: 3px solid {primary_color};
+    border-bottom: 3px solid {primary_color};
+    font-weight: 800;
+  }}
+  #{table_id} tbody tr.selected-row td:first-child {{
+    border-left: 5px solid {secondary_color};
+    box-shadow: inset 3px 0 0 {primary_color};
+  }}
+  #{table_id} tbody tr.selected-row td:last-child {{
+    border-right: 3px solid {primary_color};
+  }}
 </style>
-
-<div class="clean-table-outer {extra_class}">
-    <div id="{table_id}" class="{table_class}">
-        {table_html}
-    </div>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
-
-    if scroll_to_highlight:
-        components.html(
-            f"""
 <script>
-(function() {{
-    const tableId = "{table_id}";
-    const offsetRows = {int(scroll_offset_rows)};
-    let attempts = 0;
+(() => {{
+  const root = document.getElementById("{table_id}");
+  if (!root) return;
+  const scroller = root.querySelector(".rankings-scroll");
+  const table = root.querySelector("table");
+  const tbody = table.querySelector("tbody");
+  const headers = Array.from(table.querySelectorAll("th"));
 
-    function scrollToSelectedRow() {{
-        attempts += 1;
-        const wrapper = window.parent.document.getElementById(tableId);
-        if (!wrapper) {{
-            return attempts > 25;
-        }}
+  function focusSelected() {{
+    const selected = tbody.querySelector('tr[data-selected="true"]');
+    if (!selected || !scroller) return;
+    const targetTop = selected.offsetTop - (scroller.clientHeight / 2) + (selected.offsetHeight / 2);
+    scroller.scrollTop = Math.max(0, targetTop);
+  }}
 
-        const selectedRow = wrapper.querySelector("tbody tr.selected-team-row");
-        if (!selectedRow) {{
-            return true;
-        }}
+  function sortTable(columnIndex, numeric, ascending) {{
+    const rows = Array.from(tbody.querySelectorAll("tr"));
+    rows.sort((a, b) => {{
+      const aValue = a.children[columnIndex].dataset.sort || "";
+      const bValue = b.children[columnIndex].dataset.sort || "";
+      let result;
+      if (numeric) {{
+        const aNumber = Number.parseFloat(aValue);
+        const bNumber = Number.parseFloat(bValue);
+        result = (Number.isNaN(aNumber) ? -Infinity : aNumber) - (Number.isNaN(bNumber) ? -Infinity : bNumber);
+      }} else {{
+        result = aValue.localeCompare(bValue, undefined, {{numeric: true, sensitivity: "base"}});
+      }}
+      return ascending ? result : -result;
+    }});
+    rows.forEach(row => tbody.appendChild(row));
+    focusSelected();
+  }}
 
-        const header = wrapper.querySelector("thead");
-        const headerHeight = header ? header.getBoundingClientRect().height : 0;
-        const rowHeight = selectedRow.getBoundingClientRect().height || 40;
-        const maxScroll = Math.max(0, wrapper.scrollHeight - wrapper.clientHeight);
-        const targetScroll = selectedRow.offsetTop - headerHeight - (offsetRows * rowHeight);
+  headers.forEach((header, index) => {{
+    header.addEventListener("click", () => {{
+      const ascending = header.dataset.sortDir !== "asc";
+      headers.forEach(item => item.removeAttribute("data-sort-dir"));
+      header.dataset.sortDir = ascending ? "asc" : "desc";
+      sortTable(index, header.dataset.type === "number", ascending);
+    }});
+  }});
 
-        wrapper.scrollTop = Math.max(0, Math.min(targetScroll, maxScroll));
-        return true;
-    }}
-
-    const timer = window.setInterval(function() {{
-        if (scrollToSelectedRow()) {{
-            window.clearInterval(timer);
-        }}
-    }}, 80);
+  requestAnimationFrame(() => setTimeout(focusSelected, 80));
 }})();
 </script>
-""",
-            height=0,
-        )
+"""
+    components.html(table_html, height=max_height + 24, scrolling=False)
 
 
 def show_rank_metric(column, label, rank_value, delta_info):
@@ -681,7 +705,7 @@ season_df = team_season[team_season["season"] == selected_season].copy()
 season_df = apply_schedule_z_score(season_df)
 
 teams = sorted(season_df["team"].dropna().unique())
-default_team_index = teams.index("KC") if "KC" in teams else 0
+default_team_index = teams.index("DEN") if "DEN" in teams else 0
 team_name_lookup = build_team_name_lookup(team_assets)
 team_label_lookup = {team: team_name_lookup.get(team, team) for team in teams}
 team_abbr_lookup = {label: team for team, label in team_label_lookup.items()}
@@ -1048,6 +1072,36 @@ div[data-testid="stExpander"] div[data-testid="stSlider"] {{
     box-shadow: 0 8px 18px rgba(15, 23, 42, 0.045);
 }}
 
+.reset-weight-align-marker {{
+    height: 0.58rem;
+}}
+
+div[data-testid="column"]:has(.reset-weight-align-marker) {{
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: center !important;
+}}
+
+div[data-testid="column"]:has(.reset-weight-align-marker) div[data-testid="stButton"] {{
+    margin-top: 0.28rem !important;
+}}
+
+div[data-testid="column"]:has(.reset-weight-align-marker) div[data-testid="stButton"] button {{
+    background: #FFFFFF !important;
+    color: #111827 !important;
+    border: 1px solid #D1D5DB !important;
+    min-height: 40px !important;
+    border-radius: 10px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-weight: 750 !important;
+}}
+
+div[data-testid="column"]:has(.reset-weight-align-marker) div[data-testid="stButton"] button * {{
+    color: #111827 !important;
+}}
+
 div[data-testid="stSelectbox"] [data-baseweb="select"] > div {{
     background-color: #FFFFFF !important;
     border: 1px solid #D1D5DB !important;
@@ -1232,8 +1286,15 @@ h1, h2, h3, h4, h5, h6, p, label {{
 .hero-logo-wrap img {{
     width: 86px;
     height: 86px;
+    display: block;
     object-fit: contain;
+    object-position: center center;
     filter: drop-shadow(0 8px 15px rgba(0,0,0,0.28));
+}}
+
+.hero-logo-wrap img.broncos-logo-img {{
+    width: 96px;
+    height: 96px;
 }}
 
 .hero-team-fallback {{
@@ -1520,6 +1581,50 @@ div[data-testid="stSelectbox"] [data-baseweb="select"] input {{
     font-weight: 500 !important;
 }}
 
+@media (max-width: 700px) {{
+    .dashboard-hero {{
+        margin-top: 0.15rem;
+        padding: 1.15rem;
+        border-radius: 16px;
+    }}
+
+    .hero-title {{
+        font-size: clamp(1.85rem, 11vw, 2.45rem);
+    }}
+
+    .hero-team-card {{
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.8rem;
+        padding: 1rem;
+    }}
+
+    .hero-logo-wrap {{
+        width: 84px;
+        height: 84px;
+        flex-basis: 84px;
+    }}
+
+    .hero-logo-wrap img,
+    .hero-logo-wrap img.broncos-logo-img {{
+        width: 74px;
+        height: 74px;
+    }}
+
+    .metric-card {{
+        min-height: 112px;
+    }}
+
+    .metric-value {{
+        font-size: 1.75rem;
+    }}
+
+    .stTabs [data-baseweb="tab"] {{
+        padding: 0.58rem 0.65rem;
+        font-size: 0.84rem;
+    }}
+}}
+
 </style>
 """,
 
@@ -1533,9 +1638,15 @@ st.markdown(
 
 render_top_nav("Gini Dashboard", selected_team_color, selected_team_color2)
 
+selected_team_logo_source = (
+    logo_url_to_data_uri(selected_team_logo)
+    if selected_team == "DEN"
+    else selected_team_logo
+)
+selected_team_logo_class = "broncos-logo-img" if selected_team == "DEN" else ""
 hero_logo_html = (
-    f'<img src="{selected_team_logo}" alt="{selected_team} logo">'
-    if selected_team_logo
+    f'<img class="{selected_team_logo_class}" src="{selected_team_logo_source}" alt="{selected_team} logo">'
+    if selected_team_logo_source
     else f'<div class="hero-team-fallback">{selected_team}</div>'
 )
 
@@ -1631,7 +1742,7 @@ def model_weight_slider(column, label, key_suffix):
         label_visibility="collapsed",
     )
 
-with st.expander("Customize Model Weights", expanded=False):
+with st.expander("Customize Model Weights", expanded=True):
     st.markdown(
         '<div class="weights-intro">Adjust the model emphasis only when you want to test a different football philosophy. The dashboard updates rankings from these weights.</div>',
         unsafe_allow_html=True,
@@ -1649,7 +1760,7 @@ with st.expander("Customize Model Weights", expanded=False):
         "Schedule Strength": model_weight_slider(w7, "Schedule Strength", "Schedule_Strength"),
     }
 
-    st.markdown("<div style='height: 1.78rem;'></div>", unsafe_allow_html=True)
+    w_reset.markdown('<div class="reset-weight-align-marker"></div>', unsafe_allow_html=True)
     if w_reset.button("Reset weights", use_container_width=True):
         st.session_state[reset_counter_key] += 1
         st.rerun()
@@ -1873,8 +1984,40 @@ with tab_rankings:
             "sos_rank": "SOS Rank",
         }
     )
-    show_clean_table(
-        rankings_table,
+    ranking_filter_col, ranking_hint_col = st.columns([1.1, 2.4], gap="medium")
+    ranking_search = ranking_filter_col.text_input(
+        "Filter rankings by team",
+        key=f"rankings_team_filter_{selected_season}",
+        placeholder="Type team abbreviation",
+    )
+    rankings_table_display = rankings_table.copy()
+    if ranking_search:
+        rankings_table_display = rankings_table_display[
+            rankings_table_display["Team"].astype(str).str.contains(ranking_search, case=False, na=False)
+        ]
+        ranking_hint_col.caption("Filtered by team search. Click any column header to sort ascending or descending.")
+    else:
+        ranks = pd.to_numeric(rankings_table_display["Rank"], errors="coerce")
+        selected_rank_value = int(team_row["custom_rank"])
+        rank_min = int(ranks.min()) if ranks.notna().any() else 1
+        rank_max = int(ranks.max()) if ranks.notna().any() else len(rankings_table_display)
+        window_size = min(11, max(rank_max - rank_min + 1, 1))
+        window_start = max(rank_min, selected_rank_value - 5)
+        window_end = min(rank_max, selected_rank_value + 5)
+
+        if window_end - window_start + 1 < window_size:
+            if window_start == rank_min:
+                window_end = min(rank_max, window_start + window_size - 1)
+            elif window_end == rank_max:
+                window_start = max(rank_min, window_end - window_size + 1)
+
+        ranking_hint_col.caption(
+            f"{selected_team} is highlighted. Its automatic context is ranks {window_start}-{window_end}; "
+            "all teams remain in the scrollable, sortable table."
+        )
+
+    render_scrollable_rankings_table(
+        rankings_table_display,
         fmt={
             "Custom EStat": "{:.1f}",
             "Default EStat": "{:.1f}",
@@ -1887,11 +2030,11 @@ with tab_rankings:
             "TO Margin/G": "{:.2f}",
             "Schedule Strength": "{:.1f}",
         },
-        max_height=420,
-        highlight_column="Team",
-        highlight_value=selected_team,
-        scroll_to_highlight=True,
-        scroll_offset_rows=4,
+        selected_team=selected_team,
+        primary_color=selected_team_color,
+        secondary_color=selected_team_color2,
+        max_height=500,
+        scroll_offset_rows=5,
     )
 
 with tab_scatter:
@@ -1910,6 +2053,7 @@ with tab_scatter:
             .set_index("team_abbr")["team_logo_espn"]
             .to_dict()
         )
+        logo_lookup["DEN"] = BRONCOS_LOGO_SOURCE
 
     scatter_df["Logo URL"] = scatter_df["team"].map(logo_lookup).fillna("")
 
@@ -2000,6 +2144,7 @@ with tab_scatter:
 
         for _, row in logo_df.iterrows():
             selected_boost = 1.12 if row["Team"] == selected_team else 1.0
+            broncos_boost = 1.10 if row["Team"] == "DEN" else 1.0
 
             fig.add_layout_image(
                 dict(
@@ -2008,8 +2153,8 @@ with tab_scatter:
                     yref="y",
                     x=row["Offense EStat"],
                     y=row["Defense EStat"],
-                    sizex=base_logo_width * row["Logo Scale"] * selected_boost,
-                    sizey=base_logo_height * row["Logo Scale"] * selected_boost,
+                    sizex=base_logo_width * row["Logo Scale"] * selected_boost * broncos_boost,
+                    sizey=base_logo_height * row["Logo Scale"] * selected_boost * broncos_boost,
                     xanchor="center",
                     yanchor="middle",
                     sizing="contain",
@@ -2437,6 +2582,25 @@ a small opponent-strength adjustment so the matchup effect can be compared direc
 
     st.markdown("<div style='height: 1.25rem;'></div>", unsafe_allow_html=True)
     st.markdown(f"#### {selected_team} Game Log - {selected_season}")
+    game_log_source = chart_games.copy()
+    if "week" in game_log_source.columns and not game_log_source.empty:
+        week_values = pd.to_numeric(game_log_source["week"], errors="coerce").dropna()
+        if not week_values.empty:
+            min_week, max_week = int(week_values.min()), int(week_values.max())
+            if min_week < max_week:
+                selected_week_range = st.slider(
+                    "Filter game log by week",
+                    min_week,
+                    max_week,
+                    (min_week, max_week),
+                    key=f"game_log_week_filter_{selected_season}_{selected_team}",
+                )
+                game_log_source = game_log_source[
+                    pd.to_numeric(game_log_source["week"], errors="coerce").between(
+                        selected_week_range[0],
+                        selected_week_range[1],
+                    )
+                ]
     game_cols = [
         "week",
         "opponent",
@@ -2454,7 +2618,7 @@ a small opponent-strength adjustment so the matchup effect can be compared direc
         "penalty_yards_margin",
         "estat_game_display",
     ]
-    game_log_table = chart_games[game_cols].rename(
+    game_log_table = game_log_source[game_cols].rename(
         columns={
             **LABELS,
             "estat_game_display": "Game EStat",
@@ -2515,10 +2679,14 @@ with tab_schedule:
             sched_display = sched[sched_cols].copy()
 
             if "away_score" in sched_display.columns:
-                sched_display["away_score"] = sched_display["away_score"].apply(format_whole_number)
+                sched_display["away_score"] = pd.to_numeric(
+                    sched_display["away_score"], errors="coerce"
+                ).astype("Int64")
 
             if "home_score" in sched_display.columns:
-                sched_display["home_score"] = sched_display["home_score"].apply(format_whole_number)
+                sched_display["home_score"] = pd.to_numeric(
+                    sched_display["home_score"], errors="coerce"
+                ).astype("Int64")
 
             if "gametime" in sched_display.columns:
                 sched_display["gametime"] = sched_display["gametime"].apply(
@@ -2542,6 +2710,17 @@ with tab_schedule:
                     return surface_value.capitalize()
 
                 sched_display["surface"] = sched_display["surface"].apply(clean_surface)
+
+            schedule_search = st.text_input(
+                "Filter schedule",
+                key=f"schedule_filter_{selected_season}_{selected_team}",
+                placeholder="Opponent, stadium, roof, surface",
+            )
+            if schedule_search:
+                schedule_mask = sched_display.astype(str).apply(
+                    lambda column: column.str.contains(schedule_search, case=False, na=False)
+                ).any(axis=1)
+                sched_display = sched_display[schedule_mask]
 
             show_clean_table(
                 sched_display.rename(columns=LABELS),
@@ -2652,7 +2831,9 @@ margin: 0 0 -0.45rem 0;
         # Clean roster table display values
         for column in ["Jersey Number", "Height", "Weight", "Entry Year"]:
             if column in display_roster.columns:
-                display_roster[column] = display_roster[column].apply(format_whole_number)
+                display_roster[column] = pd.to_numeric(
+                    display_roster[column], errors="coerce"
+                ).astype("Int64")
 
         if "Draft Team" in display_roster.columns:
             display_roster["Draft Team"] = display_roster["Draft Team"].apply(

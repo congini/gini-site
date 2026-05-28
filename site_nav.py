@@ -6,6 +6,7 @@ import streamlit.components.v1 as components
 NAV_ITEMS = [
     ("About Me", "/"),
     ("Gini Dashboard", "/gini-dashboard"),
+    ("Live Leaderboard", "/live-leaderboard"),
     ("Super Square", "/super-square"),
     ("Predictive Model", "/predictive-model"),
     ("Model History", "/model-history"),
@@ -46,6 +47,38 @@ def render_top_nav(active_page, primary="#F15A24", secondary="#0073B7"):
 
 .block-container {{
     padding-top: 0.35rem !important;
+    width: 100% !important;
+    max-width: min(100%, 1560px) !important;
+    padding-left: clamp(0.75rem, 2vw, 2rem) !important;
+    padding-right: clamp(0.75rem, 2vw, 2rem) !important;
+}}
+
+html,
+body,
+.stApp,
+[data-testid="stAppViewContainer"] {{
+    max-width: 100%;
+    overflow-x: hidden;
+}}
+
+img,
+svg,
+canvas {{
+    max-width: 100%;
+}}
+
+div[data-testid="stPlotlyChart"] {{
+    max-width: 100%;
+    overflow: hidden;
+}}
+
+.stTabs [data-baseweb="tab-list"] {{
+    flex-wrap: wrap;
+    row-gap: 0.35rem;
+}}
+
+.stTabs [data-baseweb="tab"] {{
+    white-space: normal;
 }}
 
 body .site-top-nav {{
@@ -145,14 +178,19 @@ body .site-top-nav.site-nav-visible {{
 
 @media (max-width: 760px) {{
     body .site-top-nav {{
+        position: static !important;
         align-items: center;
         left: 0.35rem !important;
         right: 0.35rem !important;
+        width: auto !important;
         min-height: 58px;
+        margin: 0 0 0.75rem 0 !important;
+        padding: 0.42rem 0.5rem;
+        border-radius: 14px;
     }}
 
     body .site-top-nav-spacer {{
-        height: 0.85rem;
+        height: 0.15rem;
     }}
 
     .site-nav-links {{
@@ -165,6 +203,22 @@ body .site-top-nav.site-nav-visible {{
         min-height: 30px;
         padding: 0.34rem 0.45rem;
         font-size: 0.78rem;
+    }}
+
+    .block-container {{
+        padding-left: 0.7rem !important;
+        padding-right: 0.7rem !important;
+    }}
+
+    div[data-testid="stHorizontalBlock"] {{
+        flex-wrap: wrap !important;
+        gap: 0.65rem !important;
+    }}
+
+    div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {{
+        flex: 1 1 100% !important;
+        width: 100% !important;
+        min-width: 0 !important;
     }}
 }}
 </style>

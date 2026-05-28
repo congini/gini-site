@@ -1,0 +1,5 @@
+{
+  "refresh_time": "2026-05-28T14:48:46.706621-04:00",
+  "ok": true,
+  "message": "Live sources refreshed using nflverse season 2026. Dashboard season remains 2026. Updated local nflverse cache: players.csv, draft_picks.csv, contracts.csv, depth_charts.csv, teams.csv. Some sources were unavailable: weekly_rosters: Season must be between 2002 and 2025; player_season_stats: Failed to download https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_2026.parquet: 404 Client Error: Not Found for url: https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_2026.parquet; player_snap_counts: Season must be between 2012 and 2025; injuries: Season must be between 2009 and 2025."
+}

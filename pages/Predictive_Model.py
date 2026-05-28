@@ -1,4 +1,5 @@
 from pathlib import Path
+import base64
 import sys
 
 import pandas as pd
@@ -8,10 +9,11 @@ import streamlit as st
 
 
 try:
-    from sklearn.ensemble import GradientBoostingRegressor, RandomForestClassifier, RandomForestRegressor
+    from sklearn.base import clone
+    from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor, RandomForestClassifier, RandomForestRegressor
     from sklearn.impute import SimpleImputer
-    from sklearn.linear_model import ElasticNet, Ridge
-    from sklearn.metrics import accuracy_score, confusion_matrix, mean_absolute_error, r2_score
+    from sklearn.linear_model import ElasticNet, LogisticRegression, Ridge
+    from sklearn.metrics import accuracy_score, confusion_matrix, mean_absolute_error, r2_score, roc_auc_score
     from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import StandardScaler
 
@@ -42,6 +44,12 @@ PAGE_BG = "#F6F8FB"
 TEXT = "#07111f"
 MUTED = "#64748B"
 GRID = "#E5E7EB"
+BRONCOS_LOGO_PATH = APP_DIR / "assets" / "broncos_logo_centered.png"
+BRONCOS_LOGO_SOURCE = str(BRONCOS_LOGO_PATH)
+
+TEAM_THEME_OVERRIDES = {
+    "DEN": {"primary": PRIMARY, "secondary": SECONDARY},
+}
 
 DISPLAY_LABELS = {
     "season": "Season",
@@ -80,6 +88,11 @@ DISPLAY_LABELS = {
     "overperformer_signal": "Overperformer",
     "postseason_wins": "Postseason Wins",
     "postseason_games": "Postseason Games",
+    "pythagorean_wins": "Expected Wins",
+    "pythagorean_win_pct": "Expected Win %",
+    "win_over_pythagorean": "Wins Above Expected",
+    "epa_differential": "EPA Differential",
+    "scoring_margin_signal": "Scoring Margin Signal",
 }
 
 BINARY_COLUMNS = {
@@ -204,6 +217,8 @@ def calculate_team_records(team_game, games):
                     current_losses=("loss", "sum"),
                     current_ties=("tie", "sum"),
                     scored_games=("game_id", "nunique") if "game_id" in game_df.columns else ("win", "size"),
+                    points_for_total=("points_for", "sum"),
+                    points_against_total=("points_against", "sum"),
                 )
             )
     else:
@@ -306,6 +321,57 @@ def build_model_dataset(team_season, team_game, games):
     else:
         missing_columns.append("current_wins")
 
+    # Add accuracy-focused carry-forward features.
+    # These use the full completed season profile to predict the following/selected year.
+    if "points_for" not in model_df.columns and "points_for_total" in model_df.columns:
+        model_df["points_for"] = model_df["points_for_total"]
+    elif "points_for" in model_df.columns and "points_for_total" in model_df.columns:
+        model_df["points_for"] = model_df["points_for"].fillna(model_df["points_for_total"])
+
+    if "points_against" not in model_df.columns and "points_against_total" in model_df.columns:
+        model_df["points_against"] = model_df["points_against_total"]
+    elif "points_against" in model_df.columns and "points_against_total" in model_df.columns:
+        model_df["points_against"] = model_df["points_against"].fillna(model_df["points_against_total"])
+
+    if "scored_games" in model_df.columns:
+        games_played_for_model = pd.to_numeric(model_df["scored_games"], errors="coerce")
+    elif "games" in model_df.columns:
+        games_played_for_model = pd.to_numeric(model_df["games"], errors="coerce")
+    else:
+        games_played_for_model = pd.Series(pd.NA, index=model_df.index)
+
+    if {"points_for", "points_against"}.issubset(model_df.columns):
+        pf = pd.to_numeric(model_df["points_for"], errors="coerce")
+        pa = pd.to_numeric(model_df["points_against"], errors="coerce")
+        exponent = 2.37
+        denominator = (pf.clip(lower=0) ** exponent) + (pa.clip(lower=0) ** exponent)
+        model_df["pythagorean_win_pct"] = ((pf.clip(lower=0) ** exponent) / denominator).where(denominator > 0)
+        model_df["pythagorean_wins"] = model_df["pythagorean_win_pct"] * games_played_for_model
+
+        if "point_diff" not in model_df.columns:
+            model_df["point_diff"] = pf - pa
+        else:
+            model_df["point_diff"] = pd.to_numeric(model_df["point_diff"], errors="coerce").fillna(pf - pa)
+
+        if "point_diff_per_game" not in model_df.columns:
+            model_df["point_diff_per_game"] = model_df["point_diff"] / games_played_for_model.replace(0, pd.NA)
+        else:
+            model_df["point_diff_per_game"] = pd.to_numeric(model_df["point_diff_per_game"], errors="coerce").fillna(
+                model_df["point_diff"] / games_played_for_model.replace(0, pd.NA)
+            )
+
+    if {"current_wins", "pythagorean_wins"}.issubset(model_df.columns):
+        model_df["win_over_pythagorean"] = pd.to_numeric(model_df["current_wins"], errors="coerce") - pd.to_numeric(model_df["pythagorean_wins"], errors="coerce")
+
+    if {"off_adj_epa", "def_adj_epa"}.issubset(model_df.columns):
+        model_df["epa_differential"] = pd.to_numeric(model_df["off_adj_epa"], errors="coerce") + pd.to_numeric(model_df["def_adj_epa"], errors="coerce")
+
+    if {"point_diff_per_game", "success_margin"}.issubset(model_df.columns):
+        model_df["scoring_margin_signal"] = (
+            pd.to_numeric(model_df["point_diff_per_game"], errors="coerce")
+            + 25 * pd.to_numeric(model_df["success_margin"], errors="coerce")
+        )
+
     if not postseason_records.empty:
         model_df = model_df.merge(postseason_records, on=["season", "team"], how="left")
         model_df["postseason_wins"] = model_df["postseason_wins"].fillna(0)
@@ -389,30 +455,79 @@ def profile_text(value, positive_label, negative_label):
 
 
 def get_feature_candidates(model_df):
+    # Regular-season model: full previous-season profile predicts the selected target year.
+    # Pythagorean/scoreboard features are intentionally first because they backtested as the
+    # most stable carry-forward signals, while Gini/EPA explain team quality underneath.
     candidates = [
         "current_wins",
+        "pythagorean_wins",
+        "win_over_pythagorean",
+        "point_diff_per_game",
+        "points_for",
+        "points_against",
         "gini_score",
+        "gini_rank",
         "offense_estat",
         "defense_estat",
-        "point_diff_per_game",
         "off_adj_epa",
         "def_adj_epa",
+        "epa_differential",
         "success_margin",
-        "turnover_margin_per_game",
-        "penalty_yards_margin_per_game",
         "schedule_strength",
         "sos_rank",
+        "turnover_margin_per_game",
+        "penalty_yards_margin_per_game",
         "offense_rank",
         "defense_rank",
         "balance_gap",
-        "elite_offense",
-        "elite_defense",
+        "two_way_team",
+        "super_square_profile",
+        "underperformer_signal",
+        "overperformer_signal",
+        "scoring_margin_signal",
+    ]
+    return [column for column in candidates if column in model_df.columns]
+
+
+def get_core_pythagorean_features(model_df):
+    candidates = [
+        "current_wins",
+        "pythagorean_wins",
+        "win_over_pythagorean",
+        "point_diff_per_game",
+        "points_for",
+        "points_against",
+    ]
+    return [column for column in candidates if column in model_df.columns]
+
+
+def get_playoff_feature_candidates(model_df):
+    # Postseason model: selected/current season profile predicts selected/current season playoff success.
+    candidates = [
+        "current_wins",
+        "pythagorean_wins",
+        "win_over_pythagorean",
+        "point_diff_per_game",
+        "gini_score",
+        "gini_rank",
+        "offense_estat",
+        "defense_estat",
+        "off_adj_epa",
+        "def_adj_epa",
+        "epa_differential",
+        "success_margin",
+        "schedule_strength",
+        "offense_rank",
+        "defense_rank",
+        "balance_gap",
         "two_way_team",
         "top_gini_team",
         "top_point_diff_team",
         "super_square_profile",
         "underperformer_signal",
         "overperformer_signal",
+        "turnover_margin_per_game",
+        "penalty_yards_margin_per_game",
     ]
     return [column for column in candidates if column in model_df.columns]
 
@@ -441,148 +556,213 @@ def train_models(model_df):
             "message": "Following-season wins are not available for modeling.",
         }
 
-    features = get_feature_candidates(model_df)
-    if not features:
+    all_features = get_feature_candidates(model_df)
+    core_features = get_core_pythagorean_features(model_df)
+    if not all_features:
         return {
             "available": False,
             "message": "No usable team traits were found for modeling.",
         }
 
     training_df = model_df.dropna(subset=["next_season_wins"]).copy()
-    training_df = limit_to_last_target_seasons(training_df, 20)
-    training_df = clean_numeric_columns(training_df, features + ["next_season_wins", "strong_next_season"])
+    training_df = clean_numeric_columns(training_df, all_features + ["next_season_wins", "strong_next_season"])
     training_df = training_df.dropna(subset=["next_season_wins"])
 
-    if len(training_df) < 80 or training_df["season"].nunique() < 6:
+    if len(training_df) < 80 or training_df["season"].nunique() < 8:
         return {
             "available": False,
-            "message": "The modeling dataset is too small for a useful time-aware train/test split.",
-            "features": features,
+            "message": "The modeling dataset is too small for a useful rolling backtest.",
+            "features": all_features,
             "rows": len(training_df),
         }
 
+    model_configs = []
+    if len(core_features) >= 3:
+        model_configs.extend(
+            [
+                (
+                    "Pythagorean Ridge",
+                    Pipeline(
+                        steps=[
+                            ("imputer", SimpleImputer(strategy="median")),
+                            ("scaler", StandardScaler()),
+                            ("model", Ridge(alpha=5.0)),
+                        ]
+                    ),
+                    core_features,
+                ),
+                (
+                    "Pythagorean Elastic Net",
+                    Pipeline(
+                        steps=[
+                            ("imputer", SimpleImputer(strategy="median")),
+                            ("scaler", StandardScaler()),
+                            ("model", ElasticNet(alpha=0.05, l1_ratio=0.15, random_state=42, max_iter=20000)),
+                        ]
+                    ),
+                    core_features,
+                ),
+            ]
+        )
+
+    model_configs.extend(
+        [
+            (
+                "Expanded Ridge",
+                Pipeline(
+                    steps=[
+                        ("imputer", SimpleImputer(strategy="median")),
+                        ("scaler", StandardScaler()),
+                        ("model", Ridge(alpha=8.0)),
+                    ]
+                ),
+                all_features,
+            ),
+            (
+                "Expanded Elastic Net",
+                Pipeline(
+                    steps=[
+                        ("imputer", SimpleImputer(strategy="median")),
+                        ("scaler", StandardScaler()),
+                        ("model", ElasticNet(alpha=0.08, l1_ratio=0.25, random_state=42, max_iter=20000)),
+                    ]
+                ),
+                all_features,
+            ),
+            (
+                "Gradient Boosting",
+                Pipeline(
+                    steps=[
+                        ("imputer", SimpleImputer(strategy="median")),
+                        (
+                            "model",
+                            GradientBoostingRegressor(
+                                n_estimators=180,
+                                learning_rate=0.035,
+                                max_depth=2,
+                                random_state=42,
+                            ),
+                        ),
+                    ]
+                ),
+                all_features,
+            ),
+            (
+                "Random Forest",
+                Pipeline(
+                    steps=[
+                        ("imputer", SimpleImputer(strategy="median")),
+                        (
+                            "model",
+                            RandomForestRegressor(
+                                n_estimators=450,
+                                min_samples_leaf=4,
+                                random_state=42,
+                            ),
+                        ),
+                    ]
+                ),
+                all_features,
+            ),
+        ]
+    )
+
     seasons = sorted(training_df["season"].dropna().astype(int).unique())
-    test_count = max(3, min(5, len(seasons) // 4))
-    test_seasons = seasons[-test_count:]
-    train_seasons = seasons[:-test_count]
+    min_train_seasons = 8
+    backtest_rows = []
+    model_scores = []
 
-    train_df = training_df[training_df["season"].isin(train_seasons)].copy()
-    test_df = training_df[training_df["season"].isin(test_seasons)].copy()
+    for name, model, features in model_configs:
+        predictions = []
+        for test_season in seasons[min_train_seasons:]:
+            train_df = training_df[training_df["season"] < test_season].copy()
+            test_df = training_df[training_df["season"] == test_season].copy()
+            if train_df.empty or test_df.empty:
+                continue
 
-    if train_df.empty or test_df.empty:
-        return {
-            "available": False,
-            "message": "The time-aware train/test split did not produce enough rows.",
-            "features": features,
-        }
+            fitted = clone(model)
+            fitted.fit(train_df[features], train_df["next_season_wins"])
+            preds = fitted.predict(test_df[features]).clip(0, 17)
 
-    X_train = train_df[features]
-    y_train = train_df["next_season_wins"]
-    X_test = test_df[features]
-    y_test = test_df["next_season_wins"]
+            fold = test_df[["season", "team", "current_wins", "next_season_wins"]].copy()
+            fold["Model"] = name
+            fold["predicted_next_wins"] = preds
+            predictions.append(fold)
 
-    model_specs = {
-        "Random Forest": Pipeline(
-            steps=[
-                ("imputer", SimpleImputer(strategy="median")),
-                (
-                    "model",
-                    RandomForestRegressor(
-                        n_estimators=450,
-                        min_samples_leaf=4,
-                        random_state=42,
-                    ),
-                ),
-            ]
-        ),
-        "Gradient Boosting": Pipeline(
-            steps=[
-                ("imputer", SimpleImputer(strategy="median")),
-                (
-                    "model",
-                    GradientBoostingRegressor(
-                        n_estimators=180,
-                        learning_rate=0.035,
-                        max_depth=2,
-                        random_state=42,
-                    ),
-                ),
-            ]
-        ),
-        "Ridge Regression": Pipeline(
-            steps=[
-                ("imputer", SimpleImputer(strategy="median")),
-                ("scaler", StandardScaler()),
-                ("model", Ridge(alpha=4.0)),
-            ]
-        ),
-        "Elastic Net": Pipeline(
-            steps=[
-                ("imputer", SimpleImputer(strategy="median")),
-                ("scaler", StandardScaler()),
-                ("model", ElasticNet(alpha=0.08, l1_ratio=0.25, random_state=42, max_iter=20000)),
-            ]
-        ),
-    }
+        if not predictions:
+            continue
 
-    model_results = []
-    fitted_models = {}
-    for name, model in model_specs.items():
-        model.fit(X_train, y_train)
-        predictions = model.predict(X_test)
-        model_results.append(
+        pred_df = pd.concat(predictions, ignore_index=True)
+        errors = pred_df["next_season_wins"] - pred_df["predicted_next_wins"]
+        mae = float(errors.abs().mean())
+        rmse = float((errors.pow(2).mean()) ** 0.5)
+        within_two = float((errors.abs() <= 2).mean())
+        corr = float(pred_df[["next_season_wins", "predicted_next_wins"]].corr().iloc[0, 1]) if len(pred_df) > 2 else None
+        model_scores.append(
             {
                 "Model": name,
-                "Test MAE": float(mean_absolute_error(y_test, predictions)),
-                "Test R2": float(r2_score(y_test, predictions)) if len(test_df) > 1 else None,
+                "Rolling MAE": mae,
+                "Rolling RMSE": rmse,
+                "Within 2 Wins": within_two,
+                "Correlation": corr,
+                "Features Used": len(features),
             }
         )
-        fitted_models[name] = (model, predictions)
+        backtest_rows.append(pred_df)
 
-    model_results_df = pd.DataFrame(model_results).sort_values("Test MAE", ascending=True)
+    if not model_scores:
+        return {
+            "available": False,
+            "message": "The rolling backtest could not produce any predictions.",
+            "features": all_features,
+        }
+
+    model_results_df = pd.DataFrame(model_scores).sort_values(["Rolling MAE", "Rolling RMSE"], ascending=True)
     best_model_name = str(model_results_df.iloc[0]["Model"])
-    reg_model, best_predictions = fitted_models[best_model_name]
-    test_df["predicted_next_wins"] = best_predictions
+    best_model, best_features = next((clone(model), features) for name, model, features in model_configs if name == best_model_name)
 
-    baseline_source = (
-        test_df["current_wins"]
-        if "current_wins" in test_df.columns
-        else pd.Series(y_train.mean(), index=test_df.index)
-    )
-    baseline_mae = float(mean_absolute_error(y_test, baseline_source))
+    production_model = best_model
+    production_model.fit(training_df[best_features], training_df["next_season_wins"])
+
+    combined_backtest = pd.concat(backtest_rows, ignore_index=True)
+    best_backtest = combined_backtest[combined_backtest["Model"] == best_model_name].copy()
+
+    baseline_source = best_backtest["current_wins"].fillna(training_df["current_wins"].median())
+    baseline_mae = float(mean_absolute_error(best_backtest["next_season_wins"], baseline_source))
+    model_mae = float(model_results_df.iloc[0]["Rolling MAE"])
     metrics = {
-        "model_mae": float(mean_absolute_error(y_test, test_df["predicted_next_wins"])),
+        "model_mae": model_mae,
         "baseline_mae": baseline_mae,
-        "mae_edge": baseline_mae - float(mean_absolute_error(y_test, test_df["predicted_next_wins"])),
-        "r2": float(r2_score(y_test, test_df["predicted_next_wins"])) if len(test_df) > 1 else None,
+        "mae_edge": baseline_mae - model_mae,
+        "rmse": float(model_results_df.iloc[0]["Rolling RMSE"]),
+        "within_two_wins": float(model_results_df.iloc[0]["Within 2 Wins"]),
+        "correlation": model_results_df.iloc[0]["Correlation"],
         "best_model_name": best_model_name,
     }
 
-    best_estimator = reg_model.named_steps["model"]
+    best_estimator = production_model.named_steps["model"]
     if hasattr(best_estimator, "feature_importances_"):
         importance_values = best_estimator.feature_importances_
     elif hasattr(best_estimator, "coef_"):
         importance_values = abs(best_estimator.coef_)
     else:
-        importance_values = [0] * len(features)
+        importance_values = [0] * len(best_features)
 
     importances = pd.DataFrame(
         {
-            "Feature": features,
-            "Team Trait": [display_label(feature) for feature in features],
+            "Feature": best_features,
+            "Team Trait": [display_label(feature) for feature in best_features],
             "Importance": importance_values,
         }
     ).sort_values("Importance", ascending=False)
 
     classifier = None
     class_metrics = {}
-    class_test_df = test_df.copy()
-
+    class_test_df = best_backtest.copy()
     if "strong_next_season" in training_df.columns:
-        class_train = train_df.dropna(subset=["strong_next_season"]).copy()
-        class_test = test_df.dropna(subset=["strong_next_season"]).copy()
-        if class_train["strong_next_season"].nunique() == 2 and class_test["strong_next_season"].nunique() >= 1:
-            classifier = Pipeline(
+        class_df = training_df.dropna(subset=["strong_next_season"]).copy()
+        if class_df["strong_next_season"].nunique() == 2:
+            classifier_spec = Pipeline(
                 steps=[
                     ("imputer", SimpleImputer(strategy="median")),
                     (
@@ -595,38 +775,289 @@ def train_models(model_df):
                     ),
                 ]
             )
-            classifier.fit(class_train[features], class_train["strong_next_season"].astype(int))
-            class_predictions = classifier.predict(class_test[features])
-            class_probabilities = classifier.predict_proba(class_test[features])[:, 1]
-
-            class_test_df = class_test.copy()
-            class_test_df["predicted_10_win_team"] = class_predictions
-            class_test_df["prob_10_plus_wins"] = class_probabilities
-            class_metrics = {
-                "accuracy": float(accuracy_score(class_test["strong_next_season"].astype(int), class_predictions)),
-                "confusion_matrix": confusion_matrix(
-                    class_test["strong_next_season"].astype(int),
-                    class_predictions,
-                    labels=[0, 1],
-                ).tolist(),
-            }
+            classifier = clone(classifier_spec)
+            classifier.fit(class_df[best_features], class_df["strong_next_season"].astype(int))
+            try:
+                class_test_df = best_backtest.copy()
+                class_test_df["strong_next_season"] = (class_test_df["next_season_wins"] >= 10).astype(int)
+                class_test_df["prob_10_plus_wins"] = classifier.predict_proba(class_test_df[best_features])[:, 1] if set(best_features).issubset(class_test_df.columns) else pd.NA
+            except Exception:
+                pass
 
     return {
         "available": True,
-        "reg_model": reg_model,
+        "reg_model": production_model,
         "classifier": classifier,
-        "features": features,
+        "features": best_features,
         "metrics": metrics,
         "class_metrics": class_metrics,
         "importances": importances,
         "model_results": model_results_df,
-        "train_seasons": train_seasons,
-        "test_seasons": test_seasons,
-        "test_df": test_df,
+        "train_seasons": seasons[:-1],
+        "test_seasons": seasons[8:],
+        "test_df": best_backtest,
         "class_test_df": class_test_df,
         "training_rows": len(training_df),
-        "train_rows": len(train_df),
-        "test_rows": len(test_df),
+        "train_rows": len(training_df),
+        "test_rows": len(best_backtest),
+    }
+
+
+@st.cache_data(show_spinner=False)
+def train_playoff_models(model_df):
+    if not SKLEARN_AVAILABLE:
+        return {
+            "available": False,
+            "message": "scikit-learn is not available in this environment.",
+        }
+
+    if model_df.empty or "postseason_wins" not in model_df.columns:
+        return {
+            "available": False,
+            "message": "Postseason wins are not available for playoff modeling.",
+        }
+
+    features = get_playoff_feature_candidates(model_df)
+    if not features:
+        return {
+            "available": False,
+            "message": "No usable team traits were found for playoff modeling.",
+        }
+
+    training_df = model_df.dropna(subset=["postseason_wins"]).copy()
+    training_df = clean_numeric_columns(training_df, features + ["postseason_wins", "postseason_games"])
+    training_df = training_df.dropna(subset=["postseason_wins"])
+    training_df["won_playoff_game"] = (training_df["postseason_wins"] >= 1).astype(int)
+
+    if len(training_df) < 80 or training_df["season"].nunique() < 8:
+        return {
+            "available": False,
+            "message": "The playoff dataset is too small for a useful rolling backtest.",
+            "features": features,
+            "rows": len(training_df),
+        }
+
+    model_configs = [
+        (
+            "Playoff Ridge",
+            Pipeline(
+                steps=[
+                    ("imputer", SimpleImputer(strategy="median")),
+                    ("scaler", StandardScaler()),
+                    ("model", Ridge(alpha=4.0)),
+                ]
+            ),
+        ),
+        (
+            "Playoff Elastic Net",
+            Pipeline(
+                steps=[
+                    ("imputer", SimpleImputer(strategy="median")),
+                    ("scaler", StandardScaler()),
+                    ("model", ElasticNet(alpha=0.05, l1_ratio=0.20, random_state=42, max_iter=20000)),
+                ]
+            ),
+        ),
+        (
+            "Playoff Gradient Boosting",
+            Pipeline(
+                steps=[
+                    ("imputer", SimpleImputer(strategy="median")),
+                    (
+                        "model",
+                        GradientBoostingRegressor(
+                            n_estimators=150,
+                            learning_rate=0.035,
+                            max_depth=2,
+                            random_state=42,
+                        ),
+                    ),
+                ]
+            ),
+        ),
+        (
+            "Playoff Random Forest",
+            Pipeline(
+                steps=[
+                    ("imputer", SimpleImputer(strategy="median")),
+                    (
+                        "model",
+                        RandomForestRegressor(
+                            n_estimators=450,
+                            min_samples_leaf=4,
+                            random_state=42,
+                        ),
+                    ),
+                ]
+            ),
+        ),
+    ]
+
+    seasons = sorted(training_df["season"].dropna().astype(int).unique())
+    min_train_seasons = 8
+    model_scores = []
+    backtest_rows = []
+
+    for name, model in model_configs:
+        predictions = []
+        for test_season in seasons[min_train_seasons:]:
+            train_df = training_df[training_df["season"] < test_season].copy()
+            test_df = training_df[training_df["season"] == test_season].copy()
+            if train_df.empty or test_df.empty:
+                continue
+
+            fitted = clone(model)
+            fitted.fit(train_df[features], train_df["postseason_wins"])
+            preds = fitted.predict(test_df[features]).clip(0, 4)
+
+            fold = test_df[["season", "team", "postseason_wins", "postseason_games"]].copy()
+            fold["Model"] = name
+            fold["predicted_postseason_wins"] = preds
+            predictions.append(fold)
+
+        if not predictions:
+            continue
+
+        pred_df = pd.concat(predictions, ignore_index=True)
+        errors = pred_df["postseason_wins"] - pred_df["predicted_postseason_wins"]
+        mae = float(errors.abs().mean())
+        rmse = float((errors.pow(2).mean()) ** 0.5)
+        playoff_team_df = pred_df[pd.to_numeric(pred_df["postseason_games"], errors="coerce").fillna(0) > 0]
+        playoff_team_mae = float((playoff_team_df["postseason_wins"] - playoff_team_df["predicted_postseason_wins"]).abs().mean()) if not playoff_team_df.empty else mae
+        model_scores.append(
+            {
+                "Model": name,
+                "Rolling MAE": mae,
+                "Rolling RMSE": rmse,
+                "Playoff Team MAE": playoff_team_mae,
+            }
+        )
+        backtest_rows.append(pred_df)
+
+    if not model_scores:
+        return {
+            "available": False,
+            "message": "The rolling playoff backtest could not produce any predictions.",
+            "features": features,
+        }
+
+    model_results_df = pd.DataFrame(model_scores).sort_values(["Rolling MAE", "Playoff Team MAE"], ascending=True)
+    best_model_name = str(model_results_df.iloc[0]["Model"])
+    best_model = next(clone(model) for name, model in model_configs if name == best_model_name)
+    best_model.fit(training_df[features], training_df["postseason_wins"])
+
+    combined_backtest = pd.concat(backtest_rows, ignore_index=True)
+    best_backtest = combined_backtest[combined_backtest["Model"] == best_model_name].copy()
+    baseline_mae = float(mean_absolute_error(best_backtest["postseason_wins"], [0] * len(best_backtest)))
+    metrics = {
+        "model_mae": float(model_results_df.iloc[0]["Rolling MAE"]),
+        "baseline_mae": baseline_mae,
+        "mae_edge": baseline_mae - float(model_results_df.iloc[0]["Rolling MAE"]),
+        "rmse": float(model_results_df.iloc[0]["Rolling RMSE"]),
+        "playoff_team_mae": float(model_results_df.iloc[0]["Playoff Team MAE"]),
+        "best_model_name": best_model_name,
+    }
+
+    classifier = None
+    class_metrics = {}
+    class_results = pd.DataFrame()
+
+    if training_df["won_playoff_game"].nunique() == 2:
+        classifier_specs = {
+            "Logistic Regression": Pipeline(
+                steps=[
+                    ("imputer", SimpleImputer(strategy="median")),
+                    ("scaler", StandardScaler()),
+                    ("model", LogisticRegression(C=0.6, class_weight="balanced", max_iter=20000)),
+                ]
+            ),
+            "Random Forest": Pipeline(
+                steps=[
+                    ("imputer", SimpleImputer(strategy="median")),
+                    (
+                        "model",
+                        RandomForestClassifier(
+                            n_estimators=350,
+                            min_samples_leaf=5,
+                            random_state=42,
+                            class_weight="balanced",
+                        ),
+                    ),
+                ]
+            ),
+            "Gradient Boosting": Pipeline(
+                steps=[
+                    ("imputer", SimpleImputer(strategy="median")),
+                    (
+                        "model",
+                        GradientBoostingClassifier(
+                            n_estimators=120,
+                            learning_rate=0.035,
+                            max_depth=2,
+                            random_state=42,
+                        ),
+                    ),
+                ]
+            ),
+        }
+
+        class_rows = []
+        for name, model in classifier_specs.items():
+            probs = []
+            actuals = []
+            for test_season in seasons[min_train_seasons:]:
+                train_df = training_df[training_df["season"] < test_season].copy()
+                test_df = training_df[training_df["season"] == test_season].copy()
+                if train_df.empty or test_df.empty or train_df["won_playoff_game"].nunique() < 2:
+                    continue
+                fitted = clone(model)
+                fitted.fit(train_df[features], train_df["won_playoff_game"].astype(int))
+                probs.extend(fitted.predict_proba(test_df[features])[:, 1].tolist())
+                actuals.extend(test_df["won_playoff_game"].astype(int).tolist())
+
+            if not probs:
+                continue
+            predicted = [1 if prob >= 0.5 else 0 for prob in probs]
+            try:
+                auc_value = float(roc_auc_score(actuals, probs))
+            except ValueError:
+                auc_value = None
+            class_rows.append(
+                {
+                    "Model": name,
+                    "Accuracy": float(accuracy_score(actuals, predicted)),
+                    "AUC": auc_value,
+                }
+            )
+
+        if class_rows:
+            class_results = pd.DataFrame(class_rows)
+            class_results["_sort_auc"] = class_results["AUC"].fillna(-1)
+            class_results = class_results.sort_values(["_sort_auc", "Accuracy"], ascending=False).drop(columns="_sort_auc")
+            best_classifier_name = str(class_results.iloc[0]["Model"])
+            classifier = clone(classifier_specs[best_classifier_name])
+            classifier.fit(training_df[features], training_df["won_playoff_game"].astype(int))
+            class_metrics = {
+                "best_classifier_name": best_classifier_name,
+                "accuracy": float(class_results.iloc[0]["Accuracy"]),
+                "auc": class_results.iloc[0]["AUC"],
+            }
+
+    return {
+        "available": True,
+        "reg_model": best_model,
+        "classifier": classifier,
+        "features": features,
+        "metrics": metrics,
+        "class_metrics": class_metrics,
+        "model_results": model_results_df,
+        "class_results": class_results,
+        "train_seasons": seasons[:-1],
+        "test_seasons": seasons[8:],
+        "test_df": best_backtest,
+        "training_rows": len(training_df),
+        "train_rows": len(training_df),
+        "test_rows": len(best_backtest),
     }
 
 
@@ -642,7 +1073,7 @@ def build_team_name_lookup(team_assets):
 
 def build_team_theme_lookup(team_assets):
     if team_assets.empty or "team_abbr" not in team_assets.columns:
-        return {}
+        return TEAM_THEME_OVERRIDES.copy()
 
     lookup = {}
     for _, row in team_assets.dropna(subset=["team_abbr"]).iterrows():
@@ -654,11 +1085,46 @@ def build_team_theme_lookup(team_assets):
         if not isinstance(secondary, str) or not secondary.startswith("#"):
             secondary = SECONDARY
         lookup[abbr] = {"primary": primary, "secondary": secondary}
+
+    lookup.update(TEAM_THEME_OVERRIDES)
     return lookup
 
 
 def get_team_theme(team, team_theme_lookup):
     return team_theme_lookup.get(str(team), {"primary": PRIMARY, "secondary": SECONDARY})
+
+
+def build_team_logo_lookup(team_assets):
+    if team_assets.empty or "team_abbr" not in team_assets.columns:
+        return {"DEN": BRONCOS_LOGO_SOURCE}
+
+    logo_column = "team_logo_espn" if "team_logo_espn" in team_assets.columns else None
+    if logo_column is None:
+        return {}
+
+    lookup = {}
+    for _, row in team_assets.dropna(subset=["team_abbr"]).iterrows():
+        abbr = str(row["team_abbr"]).strip()
+        logo = row.get(logo_column, "")
+        if isinstance(logo, str) and logo.startswith("http"):
+            lookup[abbr] = logo
+    lookup["DEN"] = BRONCOS_LOGO_SOURCE
+    return lookup
+
+
+@st.cache_data(show_spinner=False)
+def image_file_to_data_uri(path):
+    if not isinstance(path, str) or not path:
+        return ""
+
+    image_path = Path(path)
+    if not image_path.is_absolute():
+        image_path = APP_DIR / image_path
+    if not image_path.exists():
+        return ""
+
+    encoded = base64.b64encode(image_path.read_bytes()).decode()
+    return f"data:image/png;base64,{encoded}"
 
 
 def team_display_name(team, team_name_lookup, include_abbr=True):
@@ -748,18 +1214,38 @@ def show_clean_table(df, fmt=None, max_height=460):
     )
 
 
-def chart_layout(fig, height=480, x_title=None, y_title=None, legend_title=None):
+def chart_layout(fig, height=480, x_title=None, y_title=None, legend_title=None, accent=PRIMARY):
     fig.update_layout(
         height=height,
         plot_bgcolor="#FFFFFF",
         paper_bgcolor="#FFFFFF",
         font=dict(color=TEXT, size=12),
-        margin=dict(l=70, r=40, t=72, b=78),
-        title=dict(font=dict(size=15, color=TEXT), x=0.01, xanchor="left"),
-        xaxis=dict(gridcolor=GRID, zeroline=False),
-        yaxis=dict(gridcolor=GRID, zeroline=False),
-        hoverlabel=dict(bgcolor="#FFFFFF", font_color=TEXT, bordercolor=PRIMARY),
+        margin=dict(l=72, r=48, t=96, b=105),
+        title=dict(
+            font=dict(size=15, color=TEXT),
+            x=0.01,
+            xanchor="left",
+            y=0.97,
+            yanchor="top",
+        ),
+        xaxis=dict(
+            gridcolor=GRID,
+            zeroline=False,
+            automargin=True,
+        ),
+        yaxis=dict(
+            gridcolor=GRID,
+            zeroline=False,
+            automargin=True,
+        ),
+        hoverlabel=dict(bgcolor="#FFFFFF", font_color=TEXT, bordercolor=accent),
+        uniformtext_minsize=10,
+        uniformtext_mode="show",
     )
+
+    fig.update_xaxes(automargin=True)
+    fig.update_yaxes(automargin=True)
+
     if x_title:
         fig.update_xaxes(title_text=x_title)
     if y_title:
@@ -770,7 +1256,7 @@ def chart_layout(fig, height=480, x_title=None, y_title=None, legend_title=None)
             legend=dict(
                 orientation="h",
                 yanchor="top",
-                y=-0.20,
+                y=-0.24,
                 xanchor="center",
                 x=0.5,
             )
@@ -796,6 +1282,28 @@ def win_text(value, decimals=0):
     return f"{float(value):.{decimals}f}"
 
 
+def expected_regular_season_games(season):
+    try:
+        season = int(season)
+    except Exception:
+        return 17
+    return 17 if season >= 2021 else 16
+
+
+def row_has_completed_regular_season(row, season):
+    if row is None:
+        return False
+    games_played = row.get("scored_games", pd.NA)
+    if pd.isna(games_played):
+        wins = row.get("current_wins", pd.NA)
+        losses = row.get("current_losses", pd.NA)
+        ties = row.get("current_ties", 0)
+        if pd.isna(wins) or pd.isna(losses):
+            return False
+        games_played = float(wins) + float(losses) + (0 if pd.isna(ties) else float(ties))
+    return float(games_played) >= expected_regular_season_games(season)
+
+
 def get_prediction_for_row(row, model_bundle):
     if not model_bundle.get("available"):
         return None, None
@@ -810,6 +1318,83 @@ def get_prediction_for_row(row, model_bundle):
         probability = float(classifier.predict_proba(X)[0, 1])
 
     return predicted_wins, probability
+
+
+def get_playoff_prediction_for_row(row, playoff_bundle):
+    if not playoff_bundle.get("available"):
+        return None, None
+
+    features = playoff_bundle["features"]
+    X = pd.DataFrame([{feature: row.get(feature, pd.NA) for feature in features}])
+    projected_wins = float(playoff_bundle["reg_model"].predict(X)[0])
+
+    probability = None
+    classifier = playoff_bundle.get("classifier")
+    if classifier is not None:
+        probability = float(classifier.predict_proba(X)[0, 1])
+
+    return projected_wins, probability
+
+
+def playoff_outlook_label(row, projected_wins, probability):
+    projected = projected_wins if projected_wins is not None and pd.notna(projected_wins) else 0
+    prob = probability if probability is not None and pd.notna(probability) else 0
+
+    if projected >= 1.3 or prob >= 0.58:
+        return "Deep-run contender"
+    if projected >= 0.8 or prob >= 0.38:
+        return "Playoff win threat"
+    if projected >= 0.35 or prob >= 0.20:
+        return "Outside chance"
+    return "Long-shot profile"
+
+
+def playoff_profile_interpretation(row):
+    reasons = []
+    wins = row.get("current_wins")
+    gini_rank = row.get("gini_rank")
+    point_diff = row.get("point_diff_per_game")
+    offense_rank = row.get("offense_rank")
+    defense_rank = row.get("defense_rank")
+    schedule_strength = row.get("schedule_strength")
+
+    if pd.notna(wins):
+        if wins >= 12:
+            reasons.append("regular-season record already looked like a top contender")
+        elif wins >= 10:
+            reasons.append("regular-season record put it in the usual playoff mix")
+        else:
+            reasons.append("regular-season record left less margin for a playoff run")
+
+    if pd.notna(gini_rank):
+        if gini_rank <= 6:
+            reasons.append("Gini profile ranked with the league's best teams")
+        elif gini_rank <= 12:
+            reasons.append("Gini profile was strong enough to support a playoff win")
+        elif gini_rank > 18:
+            reasons.append("underlying team quality lagged behind typical playoff winners")
+
+    if pd.notna(point_diff):
+        if point_diff >= 6:
+            reasons.append("scoring margin showed strong week-to-week control")
+        elif point_diff <= 0:
+            reasons.append("scoring margin did not show consistent separation")
+
+    if pd.notna(offense_rank) and pd.notna(defense_rank):
+        if offense_rank <= 12 and defense_rank <= 12:
+            reasons.append("both offense and defense were top-12 units")
+        elif offense_rank <= 8:
+            reasons.append("offense had enough strength to drive an upset path")
+        elif defense_rank <= 8:
+            reasons.append("defense had enough strength to keep playoff games close")
+
+    if pd.notna(schedule_strength) and schedule_strength >= 100:
+        reasons.append("schedule context suggests the profile was tested")
+
+    if not reasons:
+        reasons.append("profile landed near the historical middle of the playoff inputs")
+
+    return reasons[:4]
 
 
 def risk_label(row, predicted_wins, probability):
@@ -966,7 +1551,7 @@ st.markdown(
 .block-container {{
     position: relative;
     z-index: 2;
-    padding-top: 0.65rem !important;
+    padding-top: 0rem !important;
     padding-bottom: 2.6rem !important;
 }}
 
@@ -1018,17 +1603,17 @@ st.markdown(
     position: relative;
     z-index: 2;
     max-width: 1500px;
-    margin: 0 auto;
-    padding: 0.25rem 1.1rem 2.5rem 1.1rem;
+    margin: -0.85rem auto 0 auto;
+    padding: 0 1.1rem 2.5rem 1.1rem;
 }}
 
 .predict-hero {{
     position: relative;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(360px, 0.55fr);
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 0.55fr);
     gap: 1.4rem;
     align-items: center;
-    margin: 0.85rem 0 1.25rem 0;
+    margin: 0.15rem 0 1.15rem 0;
     padding: 1.8rem 1.9rem;
     border-radius: 20px;
     overflow: hidden;
@@ -1078,7 +1663,8 @@ st.markdown(
 .research-card {{
     justify-self: end;
     width: min(100%, 520px);
-    padding: 1.15rem 1.2rem;
+    min-height: 188px;
+    padding: 1.15rem 1.2rem 1.22rem 1.2rem;
     border-radius: 18px;
     background: rgba(255,255,255,0.13);
     border: 1px solid rgba(255,255,255,0.24);
@@ -1108,6 +1694,14 @@ st.markdown(
     color: rgba(255,255,255,0.83);
     font-size: 0.95rem;
     line-height: 1.55;
+}}
+
+.research-detail-text {{
+    margin-top: 0.85rem;
+    color: rgba(255,255,255,0.88);
+    font-size: 0.88rem;
+    line-height: 1.58;
+    font-weight: 760;
 }}
 
 .predict-card {{
@@ -1348,6 +1942,53 @@ div[data-testid="stSelectbox"] [data-baseweb="select"] > div {{
 
     .research-card {{
         justify-self: start;
+        width: 100%;
+    }}
+}}
+
+@media (max-width: 700px) {{
+    .predict-page {{
+        padding-left: 0.2rem;
+        padding-right: 0.2rem;
+    }}
+
+    .predict-hero {{
+        padding: 1.18rem;
+        border-radius: 16px;
+    }}
+
+    .hero-title-row {{
+        align-items: flex-start;
+        gap: 0.75rem;
+    }}
+
+    .hero-title-logo {{
+        width: 76px;
+        height: 76px;
+        flex-basis: 76px;
+        border-radius: 16px;
+    }}
+
+    .hero-title-logo img,
+    .hero-title-logo .predict-team-logo,
+    .hero-title-logo .broncos-logo-img {{
+        width: 62px !important;
+        height: 62px !important;
+        max-width: 62px !important;
+        max-height: 62px !important;
+    }}
+
+    .predict-title {{
+        font-size: clamp(1.65rem, 8.5vw, 2.15rem);
+    }}
+
+    .metric-value {{
+        font-size: 1.45rem;
+    }}
+
+    .stTabs [data-baseweb="tab"] {{
+        padding: 0.58rem 0.65rem;
+        font-size: 0.84rem;
     }}
 }}
 </style>
@@ -1370,8 +2011,10 @@ team_assets = data["team_assets"]
 
 model_df, skipped_columns, build_notes = build_model_dataset(team_season, team_game, games)
 model_bundle = train_models(model_df)
+playoff_model_bundle = train_playoff_models(model_df)
 team_name_lookup = build_team_name_lookup(team_assets)
 team_theme_lookup = build_team_theme_lookup(team_assets)
+team_logo_lookup = build_team_logo_lookup(team_assets)
 
 seasons_available = sorted(model_df["season"].dropna().astype(int).unique()) if not model_df.empty and "season" in model_df.columns else []
 profile_seasons = seasons_available[-20:] if len(seasons_available) > 20 else seasons_available
@@ -1388,37 +2031,6 @@ postseason_rows_available = bool(
 )
 
 
-# -----------------------------
-# Header
-# -----------------------------
-
-
-render_top_nav("Predictive Model", PRIMARY, SECONDARY)
-
-st.markdown('<div class="predict-page">', unsafe_allow_html=True)
-
-st.markdown(
-    """
-<div class="predict-hero">
-    <div>
-        <div class="predict-kicker">Historical Team Forecasting</div>
-        <div class="predict-title">Predictive Model</div>
-        <div class="predict-subtitle">
-            This page uses historical Gini Metric data to study which team profiles carry forward.
-            It looks at past seasons to identify patterns of sustained success, regression risk,
-            and future win potential.
-        </div>
-    </div>
-    <div class="research-card">
-        <div class="research-label">Research Goal</div>
-        <div class="research-stat">20 Seasons</div>
-        <div class="research-text">Use past team profiles to understand what tends to happen next.</div>
-    </div>
-</div>
-""",
-    unsafe_allow_html=True,
-)
-
 if load_messages:
     for message in load_messages:
         st.warning(message)
@@ -1427,495 +2039,489 @@ if model_df.empty:
     st.error("The predictive model page could not build a team-season dataset from the available files.")
     st.stop()
 
+latest_completed_season = seasons_available[-1]
+future_prediction_year = latest_completed_season + 1
+prediction_year_options = sorted(set(seasons_available + [future_prediction_year]))
+
+default_season = future_prediction_year
+stored_season = int(st.session_state.get("predictor_selected_season", default_season))
+selected_season = stored_season if stored_season in prediction_year_options else default_season
+
+season_slice = model_df[model_df["season"] == selected_season].copy()
+feature_year_for_controls = selected_season - 1
+feature_slice_for_controls = model_df[model_df["season"] == feature_year_for_controls].copy()
+team_source_slice = season_slice if not season_slice.empty else feature_slice_for_controls
+
+teams_available = sorted(team_source_slice["team"].dropna().astype(str).unique())
+default_team = "DEN" if "DEN" in teams_available else teams_available[0]
+stored_team = str(st.session_state.get("predictor_selected_team", default_team))
+selected_team = stored_team if stored_team in teams_available else default_team
+selected_label = team_display_name(selected_team, team_name_lookup, include_abbr=False)
+selected_team_name = team_name_lookup.get(selected_team, selected_team)
+selected_theme = get_team_theme(selected_team, team_theme_lookup)
+page_primary = selected_theme["primary"]
+page_secondary = selected_theme["secondary"]
+st._config.set_option("theme.primaryColor", page_primary)
+selected_logo = team_logo_lookup.get(selected_team, "")
+selected_logo_source = (
+    image_file_to_data_uri(selected_logo)
+    if selected_logo and not selected_logo.startswith("http")
+    else selected_logo
+)
+selected_logo_class = "predict-team-logo broncos-logo-img" if selected_team == "DEN" else "predict-team-logo"
+hero_logo_html = (
+    f'<img class="{selected_logo_class}" src="{selected_logo_source}" alt="{selected_team} logo">'
+    if selected_logo_source
+    else f'<div class="predict-team-fallback">{selected_team}</div>'
+)
+
+st.markdown(
+    f"""
+<style>
+.predict-bg::before {{
+    background: radial-gradient(
+        ellipse at center,
+        {page_primary}35 0%,
+        {page_primary}13 30%,
+        transparent 62%
+    ) !important;
+}}
+
+.predict-bg::after {{
+    background: radial-gradient(
+        ellipse at center,
+        {page_secondary}35 0%,
+        {page_secondary}13 30%,
+        transparent 62%
+    ) !important;
+}}
+
+.predict-hero {{
+    background:
+        radial-gradient(circle at 92% 12%, {page_primary}44 0%, transparent 28%),
+        radial-gradient(circle at 78% 85%, {page_secondary}38 0%, transparent 30%),
+        linear-gradient(135deg, #07111f 0%, #172033 58%, #273447 100%) !important;
+}}
+
+.predict-hero::before {{
+    background: linear-gradient(90deg, {page_primary}, {page_secondary}) !important;
+}}
+
+.research-card,
+.predict-card {{
+    border-left-color: {page_primary};
+}}
+
+.section-title::after {{
+    background: linear-gradient(90deg, {page_primary}, {page_secondary}) !important;
+}}
+
+.stTabs [aria-selected="true"] {{
+    color: {page_primary} !important;
+}}
+
+.stTabs [data-baseweb="tab-highlight"] {{
+    background-color: {page_primary} !important;
+}}
+
+.predict-controls-title {{
+    color: {TEXT};
+    font-size: 1.02rem;
+    font-weight: 950;
+    margin: 0.9rem 0 0.45rem 0;
+}}
+
+.selected-team-strip {{
+    display: flex;
+    align-items: center;
+    gap: 0.95rem;
+    margin: 0.85rem 0 1.15rem 0;
+    padding: 0.95rem 1rem;
+    border-radius: 16px;
+    background: rgba(255,255,255,0.92);
+    border: 1px solid rgba(15, 23, 42, 0.10);
+    border-left: 5px solid {page_primary};
+    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.065);
+}}
+
+.selected-team-strip img,
+.predict-team-logo {{
+    width: 66px;
+    height: 66px;
+    display: block;
+    object-fit: contain;
+    object-position: center center;
+    filter: drop-shadow(0 8px 16px rgba(15, 23, 42, 0.16));
+}}
+
+.predict-team-logo.broncos-logo-img {{
+    width: 78px;
+    height: 78px;
+}}
+
+.hero-title-row {{
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+}}
+
+.hero-title-logo {{
+    width: 104px;
+    height: 104px;
+    flex: 0 0 104px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border-radius: 22px;
+    background:
+        radial-gradient(circle at 30% 22%, rgba(255,255,255,0.24), rgba(255,255,255,0.10) 58%, rgba(255,255,255,0.07));
+    border: 1px solid rgba(255,255,255,0.26);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.18),
+        0 12px 26px rgba(0,0,0,0.18);
+    overflow: hidden;
+    line-height: 0;
+}}
+
+.hero-title-logo img,
+.hero-title-logo .predict-team-logo {{
+    width: 82px !important;
+    height: 82px !important;
+    max-width: 82px !important;
+    max-height: 82px !important;
+    object-fit: contain;
+    object-position: center center;
+    display: block;
+    margin: auto;
+    filter: drop-shadow(0 8px 12px rgba(0,0,0,0.24));
+}}
+
+.hero-title-logo .broncos-logo-img {{
+    width: 88px !important;
+    height: 88px !important;
+    max-width: 88px !important;
+    max-height: 88px !important;
+    transform: translateX(3px);
+}}
+
+.hero-title-text {{
+    min-width: 0;
+}}
+
+.hero-title-text .predict-title {{
+    margin-bottom: 0;
+}}
+
+.predict-team-fallback {{
+    width: 66px;
+    height: 66px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #FFFFFF;
+    background: {page_primary};
+    font-size: 1rem;
+    font-weight: 950;
+}}
+
+.selected-team-kicker {{
+    color: {MUTED};
+    font-size: 0.74rem;
+    font-weight: 950;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 0.2rem;
+}}
+
+.selected-team-main {{
+    color: {TEXT};
+    font-size: 1.2rem;
+    line-height: 1.15;
+    font-weight: 950;
+}}
+
+.selected-team-sub {{
+    color: {MUTED};
+    font-size: 0.86rem;
+    line-height: 1.35;
+    margin-top: 0.24rem;
+    font-weight: 750;
+}}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
 
 # -----------------------------
-# Tabs
+# Header
 # -----------------------------
 
 
-tab_overview, tab_patterns, tab_regression, tab_tool, tab_details = st.tabs(
+render_top_nav("Predictive Model", page_primary, page_secondary)
+
+st.markdown('<div class="predict-page">', unsafe_allow_html=True)
+
+st.markdown(
+    f"""
+<div class="predict-hero">
+<div>
+<div class="predict-kicker">Historical Team Forecasting</div>
+
+<div class="hero-title-row">
+<div class="hero-title-logo">
+{hero_logo_html}
+</div>
+<div class="hero-title-text">
+<div class="predict-title">{selected_season} {selected_team_name}</div>
+</div>
+</div>
+
+<div class="predict-subtitle">
+Regular-season outlook and playoff upside for the selected team profile.
+Change the team or year below and the full page theme will update with it.
+</div>
+</div>
+
+<div class="research-card">
+<div class="research-label">Forecast Inputs</div>
+<div class="research-stat" style="font-size:1.45rem;">
+{selected_season - 1} → {selected_season}
+</div>
+<div class="research-text">
+Uses the completed {selected_season - 1} full-season profile to forecast {selected_season} regular-season wins.
+Playoff projections unlock only after the selected regular season is complete.
+</div>
+<div class="research-detail-text">
+The forecast reads the Gini profile, expected-wins profile, scoring efficiency, and season trend together instead of treating any one input as the whole answer.
+</div>
+</div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+st.markdown('<div class="predict-controls-title">Predictor Controls</div>', unsafe_allow_html=True)
+control_season_col, control_team_col = st.columns([1, 2])
+season_options = sorted(prediction_year_options, reverse=True)
+if st.session_state.get("predictor_selected_season_control") not in season_options:
+    st.session_state.pop("predictor_selected_season_control", None)
+selected_season_choice = control_season_col.selectbox(
+    "Season / Year",
+    season_options,
+    index=season_options.index(selected_season),
+    key="predictor_selected_season_control",
+)
+
+team_label_lookup = {
+    team: team_display_name(team, team_name_lookup, include_abbr=False)
+    for team in teams_available
+}
+team_abbr_lookup = {label: team for team, label in team_label_lookup.items()}
+team_options = list(team_label_lookup.values())
+selected_team_label = team_label_lookup.get(selected_team, selected_team)
+if st.session_state.get("predictor_selected_team_control") not in team_options:
+    st.session_state.pop("predictor_selected_team_control", None)
+selected_team_choice = control_team_col.selectbox(
+    "Team",
+    team_options,
+    index=team_options.index(selected_team_label) if selected_team_label in team_options else 0,
+    key="predictor_selected_team_control",
+)
+
+new_selected_team = team_abbr_lookup.get(selected_team_choice, selected_team_choice)
+if int(selected_season_choice) != selected_season or new_selected_team != selected_team:
+    st.session_state["predictor_selected_season"] = int(selected_season_choice)
+    st.session_state["predictor_selected_team"] = new_selected_team
+    st.rerun()
+
+
+# -----------------------------
+# Predictor tools
+# -----------------------------
+
+
+st.markdown(
+    f"""
+<div style="
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    width:100%;
+    margin:0.45rem 0 0.85rem 0;
+">
+    <div style="
+        text-align:center;
+        color:{TEXT};
+        font-size:1.55rem;
+        line-height:1.2;
+        font-weight:950;
+        letter-spacing:-0.02em;
+        margin:0;
+    ">
+        {selected_season} Predictor Tool
+    </div>
+    <div style="
+        width:64px;
+        height:4px;
+        border-radius:999px;
+        margin-top:0.32rem;
+        background:linear-gradient(90deg, {page_primary}, {page_secondary});
+    "></div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+tab_regular, tab_playoffs = st.tabs(
     [
-        "Model Overview",
-        "Patterns of Success",
-        "Regression / Failure Signals",
-        "Prediction Tool",
-        "Model Details",
+        "Regular Season Predictor Tool",
+        "Playoffs Predictor Tool",
     ]
 )
 
 
-with tab_overview:
-    st.markdown('<div class="section-title">What the Model Studies</div>', unsafe_allow_html=True)
-    st.markdown(
-        """
-<div class="predict-card explain-box">
-    <div class="explain-title">How to read this page</div>
-    This page studies whether a team's regular-season profile can help explain what happens one year later.
-    Instead of only looking at record, the model compares team quality, scoring margin, offense, defense,
-    consistency, turnovers, penalties, and schedule context. The goal is to estimate following-season wins
-    and identify which team profiles tend to sustain success, regress, or improve.
-    <br><br>
-    This model is most useful for understanding team profiles, not making exact win guarantees. The NFL changes
-    quickly through injuries, quarterback changes, coaching changes, roster movement, and schedule changes, so this
-    should be treated as research and context, not betting advice.
-</div>
-""",
-        unsafe_allow_html=True,
-    )
-    render_takeaway(
-        "This model compares selected-season team profiles to what happened the following regular season. Lower model error means the projections were closer to actual results."
-    )
+with tab_regular:
+    prediction_target_year = selected_season
+    feature_year = selected_season - 1
 
-    metric_cols = st.columns(4)
-    mae_edge = model_bundle.get("metrics", {}).get("mae_edge") if model_bundle.get("available") else None
-    with metric_cols[0]:
-        render_metric_card(
-            "Seasons Analyzed",
-            len(profile_seasons),
-            f"{min(profile_seasons)}-{max(profile_seasons)} completed seasons used in the study"
-            if profile_seasons
-            else "Team profiles unavailable",
-        )
-    with metric_cols[1]:
-        render_metric_card("Model Rows Tested", completed_target_rows, "Team-seasons with known following-season wins")
-    with metric_cols[2]:
-        render_metric_card("Model Target", "Following-Season Wins", "Following-season regular-season wins")
-    with metric_cols[3]:
-        if model_bundle.get("available"):
-            if mae_edge >= 0:
-                helper = f"Beat the simple baseline by {mae_edge:.2f} wins"
-            else:
-                helper = f"{abs(mae_edge):.2f} wins worse than the simple baseline"
-            render_metric_card("Model MAE", f"{model_bundle['metrics']['model_mae']:.2f}", helper)
-        else:
-            render_metric_card("Model Status", "Limited", model_bundle.get("message", "Model unavailable"))
+    feature_slice = model_df[model_df["season"] == feature_year].copy()
+    target_slice = model_df[model_df["season"] == prediction_target_year].copy()
 
-    if profile_seasons:
-        render_caption(
-            f"The study shows the last {len(profile_seasons)} available profile seasons ({min(profile_seasons)}-{max(profile_seasons)}). "
-            "Model testing only uses team-seasons where the following season is already known."
-        )
+    selected_rows = feature_slice[feature_slice["team"] == selected_team]
+    target_rows = target_slice[target_slice["team"] == selected_team]
 
-    if model_bundle.get("available"):
-        if model_bundle["metrics"]["mae_edge"] < 0:
-            st.warning(
-                "On the held-out seasons, the best model is worse than the simple baseline that uses selected-season wins. "
-                "That is useful to know: following-season NFL wins are noisy, and the page should be read as research context."
-            )
-        else:
-            st.success(
-                f"The best model beat the simple baseline by {model_bundle['metrics']['mae_edge']:.2f} wins on average in the held-out seasons."
-            )
-
-        st.markdown(
-            f"""
-<div class="predict-card explain-box">
-    <div class="explain-title">How to read the error</div>
-    An MAE of {model_bundle['metrics']['model_mae']:.1f} means a projection of 9 wins should be read more like a rough range,
-    not an exact prediction.
-</div>
-""",
-            unsafe_allow_html=True,
-        )
-
-        overview_cols = st.columns(2)
-        with overview_cols[0]:
-            st.markdown('<div class="section-title">Model Error vs Simple Baseline</div>', unsafe_allow_html=True)
-            compare_df = pd.DataFrame(
-                {
-                    "Forecast Method": [
-                        f"Best model: {model_bundle['metrics']['best_model_name']}",
-                        "Simple baseline: selected-season wins",
-                    ],
-                    "Average Miss in Wins": [
-                        model_bundle["metrics"]["model_mae"],
-                        model_bundle["metrics"]["baseline_mae"],
-                    ],
-                }
-            )
-            fig = px.bar(
-                compare_df,
-                x="Forecast Method",
-                y="Average Miss in Wins",
-                color="Forecast Method",
-                color_discrete_sequence=[PRIMARY, SECONDARY],
-                title="Model Error vs Simple Baseline",
-                labels={"Average Miss in Wins": "Average Miss in Wins", "Forecast Method": "Forecast Method"},
-            )
-            fig.update_traces(texttemplate="%{y:.2f}", textposition="outside", showlegend=False)
-            st.plotly_chart(chart_layout(fig, height=390, y_title="Average Miss in Wins"), use_container_width=True)
-            render_caption(
-                "Lower is better. This chart compares the model's average miss in wins against a simple baseline that assumes a team will win about the same number of games the following season."
-            )
-
-        with overview_cols[1]:
-            st.markdown('<div class="section-title">Most Important Team Traits</div>', unsafe_allow_html=True)
-            importance_df = model_bundle["importances"].head(10).sort_values("Importance", ascending=True)
-            fig = px.bar(
-                importance_df,
-                x="Importance",
-                y="Team Trait",
-                orientation="h",
-                color_discrete_sequence=[PRIMARY],
-                title="Most Important Team Traits",
-                labels={"Importance": "Model Importance", "Team Trait": "Team Trait"},
-            )
-            st.plotly_chart(chart_layout(fig, height=390, x_title="Model Importance"), use_container_width=True)
-            render_caption(
-                "These are the team traits the model relied on most when estimating following-season wins. Higher importance means the trait helped more in the model's historical predictions."
-            )
-
-        st.markdown('<div class="section-title">Models Compared</div>', unsafe_allow_html=True)
-        model_results = model_bundle["model_results"].rename(
-            columns={"Model": "Model", "Test MAE": "Average Miss in Wins", "Test R2": "R-Squared"}
-        )
-        show_clean_table(
-            model_results,
-            fmt={"Average Miss in Wins": "{:.2f}", "R-Squared": "{:.2f}"},
-            max_height=220,
-        )
-        render_caption(
-            "This table compares the tested forecasting methods on held-out seasons. The selected model is the one with the lowest average miss in wins."
-        )
-    else:
-        st.info(model_bundle.get("message", "The model could not be trained from the available files."))
-
-
-with tab_patterns:
-    st.markdown('<div class="section-title">Patterns of Success</div>', unsafe_allow_html=True)
-    render_takeaway(
-        "Stronger Gini profiles and balanced teams tend to carry forward better than weaker or one-dimensional profiles."
-    )
-
-    pattern_df = analysis_df.copy()
-    if pattern_df.empty:
-        st.info("Following-season outcomes are not available, so success-pattern charts cannot be built yet.")
-    else:
-        if "gini_rank" in pattern_df.columns:
-            pattern_df["Gini Rank Group"] = pd.cut(
-                pattern_df["gini_rank"],
-                bins=[0, 6, 12, 20, 40],
-                labels=["Top 6", "7-12", "13-20", "21+"],
-                include_lowest=True,
-            )
-            gini_bucket = (
-                pattern_df.groupby("Gini Rank Group", observed=False)["next_season_wins"]
-                .mean()
-                .reset_index()
-                .rename(columns={"next_season_wins": "Average Following-Season Wins"})
-            )
-            fig = px.bar(
-                gini_bucket,
-                x="Gini Rank Group",
-                y="Average Following-Season Wins",
-                color="Gini Rank Group",
-                color_discrete_sequence=[PRIMARY, SECONDARY, "#94A3B8", "#CBD5E1"],
-                title="Average Following-Season Wins by Gini Rank Group",
-                labels={"Gini Rank Group": "Gini Rank Group", "Average Following-Season Wins": "Average Following-Season Wins"},
-            )
-            fig.update_traces(texttemplate="%{y:.1f}", textposition="outside", showlegend=False)
-            st.plotly_chart(chart_layout(fig, y_title="Average Following-Season Wins"), use_container_width=True)
-            render_caption(
-                "Teams with stronger Gini rankings tended to win more games the following season, which suggests overall team quality often carries forward."
-            )
-
-        chart_cols = st.columns(2)
-        with chart_cols[0]:
-            if {"gini_score", "next_season_wins"}.issubset(pattern_df.columns):
-                scatter_df = pattern_df.copy()
-                scatter_df["Team Name"] = scatter_df["team"].apply(
-                    lambda team: team_display_name(team, team_name_lookup, include_abbr=True)
-                )
-                scatter_df["Team Profile"] = (
-                    scatter_df["two_way_team"].map({1: "Two-Way Team", 0: "Other Team"})
-                    if "two_way_team" in scatter_df.columns
-                    else "Team"
-                )
-                fig = px.scatter(
-                    scatter_df,
-                    x="gini_score",
-                    y="next_season_wins",
-                    color="Team Profile",
-                    hover_name="Team Name",
-                    hover_data={
-                        "season": True,
-                        "Team Name": False,
-                        "current_wins": ":.0f" if "current_wins" in scatter_df.columns else False,
-                        "gini_score": ":.1f",
-                        "next_season_wins": ":.0f",
-                        "Team Profile": True,
-                    },
-                    labels={
-                        "gini_score": "Gini Score",
-                        "next_season_wins": "Following Season Wins",
-                        "season": "Season",
-                        "current_wins": "Selected Season Wins",
-                    },
-                    color_discrete_map={"Two-Way Team": PRIMARY, "Other Team": "#94A3B8", "Team": PRIMARY},
-                    title="Gini Score vs Following-Season Wins",
-                )
-                st.plotly_chart(
-                    chart_layout(fig, x_title="Gini Score", y_title="Following Season Wins", legend_title="Team Profile"),
-                    use_container_width=True,
-                )
-                render_caption(
-                    "Each dot is a team-season. The chart shows whether stronger Gini Scores were usually followed by more wins one year later."
-                )
-
-        with chart_cols[1]:
-            if "two_way_team" in pattern_df.columns:
-                two_way_summary = (
-                    pattern_df.assign(Profile=pattern_df["two_way_team"].map({1: "Two-Way Teams", 0: "Other Teams"}))
-                    .groupby("Profile", as_index=False)["next_season_wins"]
-                    .mean()
-                    .rename(columns={"next_season_wins": "Average Following-Season Wins"})
-                )
-                fig = px.bar(
-                    two_way_summary,
-                    x="Profile",
-                    y="Average Following-Season Wins",
-                    color="Profile",
-                    color_discrete_sequence=[PRIMARY, "#94A3B8"],
-                    title="Two-Way Teams vs Other Teams",
-                    labels={"Profile": "Team Profile", "Average Following-Season Wins": "Average Following-Season Wins"},
-                )
-                fig.update_traces(texttemplate="%{y:.1f}", textposition="outside", showlegend=False)
-                st.plotly_chart(chart_layout(fig, y_title="Average Following-Season Wins"), use_container_width=True)
-                render_caption(
-                    "Two-way teams are teams with strong offense and defense profiles. This comparison shows whether balanced teams tended to perform better the following season."
-                )
-
-        if "super_square_profile" in pattern_df.columns:
-            super_summary = (
-                pattern_df.assign(Profile=pattern_df["super_square_profile"].map({1: "Super Square", 0: "Outside"}))
-                .groupby("Profile", as_index=False)
-                .agg(
-                    Avg_Next_Wins=("next_season_wins", "mean"),
-                    Strong_Next_Season_Rate=("strong_next_season", "mean"),
-                    Team_Seasons=("team", "count"),
-                )
-                .rename(
-                    columns={
-                        "Avg_Next_Wins": "Average Following-Season Wins",
-                        "Strong_Next_Season_Rate": "10+ Win Following Season Rate",
-                        "Team_Seasons": "Team-Seasons",
-                    }
-                )
-            )
-            st.markdown('<div class="section-title">Super Square Carry-Forward</div>', unsafe_allow_html=True)
-            show_clean_table(
-                super_summary,
-                fmt={
-                    "Average Following-Season Wins": "{:.1f}",
-                    "10+ Win Following Season Rate": "{:.1%}",
-                },
-                max_height=190,
-            )
-            render_caption(
-                "This table compares Super Square teams with all other teams. It shows whether the strongest contender profiles were more likely to remain successful the following season."
-            )
-
-        top_cols = [
-            "season",
-            "team",
-            "current_wins",
-            "next_season_wins",
-            "wins_change",
-            "gini_score",
-            "gini_rank",
-            "point_diff_per_game",
-            "offense_rank",
-            "defense_rank",
-            "super_square_profile",
-        ]
-        top_cols = [column for column in top_cols if column in pattern_df.columns]
-        top_profiles = pattern_df.sort_values(["gini_score", "point_diff_per_game"], ascending=False).head(30)[top_cols]
-        st.markdown('<div class="section-title">Top Historical Profiles</div>', unsafe_allow_html=True)
-        show_clean_table(rename_for_display(top_profiles, team_name_lookup), max_height=520)
-        render_caption(
-            "These are the strongest historical profiles by Gini Score and point differential. The table shows what happened to each team in the following regular season."
-        )
-
-
-with tab_regression:
-    st.markdown('<div class="section-title">Regression and Failure Signals</div>', unsafe_allow_html=True)
-    render_takeaway(
-        "Regression teams are teams that won a lot in the selected season but dropped by at least three wins the following year. This section looks for signs that their success may have been fragile."
-    )
-    st.markdown(
-        """
-<div class="predict-card explain-box">
-    Regression teams are teams that won at least 10 games in the selected season and then dropped by at least
-    three wins the following season.
-    <br><br>
-    The goal is to see whether some winning teams relied on advantages that may be harder to repeat,
-    such as turnover margin or a record that was stronger than the underlying team profile.
-</div>
-""",
-        unsafe_allow_html=True,
-    )
-    regression_df = analysis_df.copy()
-
-    if regression_df.empty or "current_wins" not in regression_df.columns:
-        st.info("Regression analysis needs both selected-season wins and following-season wins.")
-    else:
-        regression_df["Regression Team"] = (
-            (regression_df["current_wins"] >= 10)
-            & (regression_df["next_season_wins"] <= regression_df["current_wins"] - 3)
-        )
-        dropoffs = regression_df.sort_values("wins_change").head(30)
-
-        reg_cols = st.columns(3)
-        with reg_cols[0]:
-            render_metric_card("Regression Teams", int(regression_df["Regression Team"].sum()), "10+ wins, then down 3+ wins")
-        with reg_cols[1]:
-            if "turnover_margin_per_game" in regression_df.columns:
-                avg_reg_to = regression_df.loc[regression_df["Regression Team"], "turnover_margin_per_game"].mean()
-                render_metric_card("Average Turnover Margin per Game", number_text(avg_reg_to, 2), "Among regression teams")
-            else:
-                render_metric_card("Average Turnover Margin per Game", "Missing", "Column not available")
-        with reg_cols[2]:
-            if "overperformer_signal" in regression_df.columns:
-                rate = regression_df.loc[regression_df["Regression Team"], "overperformer_signal"].mean()
-                render_metric_card("Overperformer Rate", percent_text(rate), "Among regression teams")
-            else:
-                render_metric_card("Overperformer Rate", "Missing", "Column not available")
-
-        if "turnover_margin_per_game" in regression_df.columns:
-            box_df = regression_df.assign(
-                Group=regression_df["Regression Team"].map({True: "Regression Team", False: "Other Team"})
-            )
-            fig = px.box(
-                box_df,
-                x="Group",
-                y="turnover_margin_per_game",
-                color="Group",
-                color_discrete_map={"Regression Team": PRIMARY, "Other Team": "#94A3B8"},
-                title="Turnover Margin and Next-Year Regression",
-                labels={"Group": "Team Group", "turnover_margin_per_game": "Turnover Margin per Game"},
-            )
-            st.plotly_chart(
-                chart_layout(fig, y_title="Turnover Margin per Game", legend_title="Team Group"),
-                use_container_width=True,
-            )
-            render_caption(
-                "This chart checks whether teams that fell off the next year may have relied more on turnover margin, which can be harder to repeat."
-            )
-
-        reg_columns = [
-            "season",
-            "team",
-            "current_wins",
-            "next_season_wins",
-            "wins_change",
-            "gini_score",
-            "point_diff_per_game",
-            "offense_rank",
-            "defense_rank",
-            "turnover_margin_per_game",
-            "schedule_strength",
-            "overperformer_signal",
-        ]
-        reg_columns = [column for column in reg_columns if column in dropoffs.columns]
-        st.markdown('<div class="section-title">Biggest Drop-Offs</div>', unsafe_allow_html=True)
-        show_clean_table(rename_for_display(dropoffs[reg_columns], team_name_lookup), max_height=560)
-        render_caption(
-            "These are teams that won at least 10 games and then dropped by at least three wins the next year."
-        )
-
-
-with tab_tool:
-    st.markdown('<div class="section-title">Team Prediction Tool</div>', unsafe_allow_html=True)
-    render_takeaway(
-        "Choose a team-season to see how similar historical profiles performed and what the model projects for the following regular season."
-    )
-
-    tool_seasons = sorted(model_df["season"].dropna().astype(int).unique(), reverse=True)
-    setup_cols = st.columns([1, 1])
-    selected_season = setup_cols[0].selectbox("Season", tool_seasons, index=0, key="predictive_tool_season")
-    following_season = selected_season + 1
-    season_slice = model_df[model_df["season"] == selected_season].copy()
-
-    team_labels = {
-        team: team_name_lookup.get(team, team)
-        for team in sorted(season_slice["team"].dropna().astype(str).unique())
-    }
-    label_to_team = {label: team for team, label in team_labels.items()}
-    selected_label = setup_cols[1].selectbox("Team", list(label_to_team.keys()), key="predictive_tool_team")
-    selected_team = label_to_team[selected_label]
-
-    selected_rows = season_slice[season_slice["team"] == selected_team]
     if selected_rows.empty:
-        st.warning("No team-season row found for this selection.")
+        st.warning(f"No {feature_year} team-season row found for this selection. The model needs the completed prior season to project {prediction_target_year}.")
     else:
         selected_row = selected_rows.iloc[0]
+        target_row = target_rows.iloc[0] if not target_rows.empty else None
+
         predicted_wins, probability = get_prediction_for_row(selected_row, model_bundle)
         projected_wins = max(0, min(17, predicted_wins)) if predicted_wins is not None else None
+
         model_mae = model_bundle.get("metrics", {}).get("model_mae") if model_bundle.get("available") else None
-        range_text = "Not available yet"
+        range_text = "Not available yet."
         if projected_wins is not None and model_mae is not None:
             lower_bound = max(0, round(projected_wins - model_mae))
             upper_bound = min(17, round(projected_wins + model_mae))
             range_text = f"{lower_bound} to {upper_bound} wins"
-        label, explanation = risk_label(selected_row, predicted_wins, probability)
-        profile_reasons = profile_interpretation(selected_row, predicted_wins, season_slice)
-        reasons_html = "".join(f"<li>{reason}</li>" for reason in profile_reasons)
-        actual_following_wins = selected_row.get("next_season_wins")
+
+        actual_selected_year_wins = (
+            target_row.get("current_wins")
+            if target_row is not None
+            else pd.NA
+        )
+        selected_year_games_played = (
+            target_row.get("scored_games")
+            if target_row is not None
+            else pd.NA
+        )
+        full_regular_season_games = expected_regular_season_games(prediction_target_year)
+        model_result_helper = f"Projection vs. {prediction_target_year} pace/result"
+
+        if pd.isna(actual_selected_year_wins):
+            actual_wins_text = "Not available yet."
+            model_result_text = "Awaiting season start."
+            games_played_value = 0
+        else:
+            actual_wins_value = float(actual_selected_year_wins)
+            games_played_value = float(selected_year_games_played) if pd.notna(selected_year_games_played) else 0
+            actual_wins_text = win_text(actual_selected_year_wins, 0)
+
+            if projected_wins is None or pd.isna(projected_wins):
+                model_result_text = "Projection unavailable."
+            elif games_played_value > 0 and games_played_value < full_regular_season_games:
+                current_win_pace = (actual_wins_value / games_played_value) * full_regular_season_games
+                pace_difference = current_win_pace - float(projected_wins)
+
+                if abs(pace_difference) < 0.05:
+                    model_result_text = f"Currently on pace for {current_win_pace:.1f} wins, matching projection."
+                elif pace_difference > 0:
+                    model_result_text = f"Currently on pace for {current_win_pace:.1f} wins, {pace_difference:.1f} above projection."
+                else:
+                    model_result_text = f"Currently on pace for {current_win_pace:.1f} wins, {abs(pace_difference):.1f} below projection."
+            else:
+                model_result_helper = ""
+                difference = actual_wins_value - float(projected_wins)
+
+                if abs(difference) < 0.05:
+                    model_result_text = "Actual matched the projection."
+                elif difference > 0:
+                    model_result_text = f"Actual finished {difference:.1f} wins above projection."
+                else:
+                    model_result_text = f"Actual finished {abs(difference):.1f} wins below projection."
+
+        label, explanation = risk_label(selected_row, projected_wins, probability)
+        profile_reasons = profile_interpretation(selected_row, projected_wins, feature_slice)
+
+        expected_wins = selected_row.get("pythagorean_wins", pd.NA)
+        wins_above_expected = selected_row.get("win_over_pythagorean", pd.NA)
+        if pd.notna(expected_wins) and pd.notna(wins_above_expected):
+            if float(wins_above_expected) >= 1.5:
+                profile_reasons.insert(0, f"record regression flag: {feature_year} finished {float(wins_above_expected):.1f} wins above expected")
+            elif float(wins_above_expected) <= -1.5:
+                profile_reasons.insert(0, f"improvement flag: {feature_year} finished {abs(float(wins_above_expected)):.1f} wins below expected")
+            else:
+                profile_reasons.insert(0, f"expected-wins profile was stable at {float(expected_wins):.1f} wins")
+
+        if projected_wins is not None and pd.notna(projected_wins):
+            profile_reasons.append(f"rolling backtest model projects {float(projected_wins):.1f} wins for {prediction_target_year}")
+
+        reasons_html = "".join(f"<li>{reason}</li>" for reason in profile_reasons[:5])
+
         selected_theme = get_team_theme(selected_team, team_theme_lookup)
         team_primary = selected_theme["primary"]
         team_secondary = selected_theme["secondary"]
 
-        tool_cols = st.columns(5)
-        with tool_cols[0]:
+        metric_cols = st.columns(4)
+        with metric_cols[0]:
             render_metric_card(
-                f"{selected_season} Wins",
-                win_text(selected_row.get("current_wins"), 0),
-                "Selected regular season",
+                f"{prediction_target_year} Wins",
+                actual_wins_text,
+                f"Actual {prediction_target_year} wins",
                 accent=team_primary,
             )
-        with tool_cols[1]:
+        with metric_cols[1]:
             render_metric_card(
-                f"Projected {following_season} Wins",
+                f"Projected {prediction_target_year} Wins",
                 win_text(projected_wins, 1) if projected_wins is not None else "Model unavailable",
-                model_bundle["metrics"]["best_model_name"] if model_bundle.get("available") else "Projection unavailable",
+                f"Uses {feature_year} full-season profile",
                 accent=team_secondary,
             )
-        with tool_cols[2]:
-            render_metric_card("Reasonable Range", range_text, "Based on model MAE", accent=team_primary)
-        with tool_cols[3]:
+        with metric_cols[2]:
             render_metric_card(
-                f"Actual {following_season} Wins",
-                win_text(actual_following_wins, 0),
-                "Known only after the following season",
-                accent=team_secondary,
-            )
-        with tool_cols[4]:
-            render_metric_card(
-                f"{following_season} 10+ Win Probability",
-                percent_text(probability),
-                "Classifier estimate" if probability is not None else "Classifier unavailable",
+                f"Likely {prediction_target_year} Range",
+                range_text,
+                "Uses rolling backtest error",
                 accent=team_primary,
+            )
+        with metric_cols[3]:
+            render_metric_card(
+                "Model Result",
+                model_result_text,
+                model_result_helper,
+                accent=team_secondary,
             )
 
         st.markdown(
             f"""
 <div class="prediction-summary">
     <div class="predict-card profile-panel" style="border-left-color:{team_primary};">
-        <div class="team-accent-badge" style="background:{team_primary};">{selected_season} Team Profile</div>
-        <div class="profile-heading">{selected_season} {selected_label}</div>
+        <div class="team-accent-badge" style="background:{team_primary};">{feature_year} Input Profile</div>
+        <div class="profile-heading">{selected_label}</div>
         <div class="profile-body">
             <ul>{reasons_html}</ul>
-            <p>{explanation}</p>
         </div>
     </div>
     <div class="predict-card profile-panel" style="border-left-color:{team_secondary};">
-        <div class="team-accent-badge" style="background:{team_secondary};">Model Profile</div>
+        <div class="team-accent-badge" style="background:{team_secondary};">Regular Season Outlook</div>
         <div class="profile-heading">{label}</div>
-        <div class="profile-body">
-            Gini Score: {number_text(selected_row.get("gini_score"), 1)}<br>
-            Point Differential per Game: {number_text(selected_row.get("point_diff_per_game"), 1)}<br>
-            Offense Rank: {number_text(selected_row.get("offense_rank"), 0)} / Defense Rank: {number_text(selected_row.get("defense_rank"), 0)}
-        </div>
+        <div class="profile-body">{explanation}</div>
     </div>
 </div>
 """,
@@ -1923,11 +2529,11 @@ with tab_tool:
         )
 
         comparison_values = [
-            (f"{selected_season} Wins", selected_row.get("current_wins")),
-            (f"Projected {following_season} Wins", projected_wins),
+            (f"Projected {prediction_target_year} Wins", projected_wins),
         ]
-        if pd.notna(actual_following_wins):
-            comparison_values.append((f"Actual {following_season} Wins", actual_following_wins))
+        if pd.notna(actual_selected_year_wins):
+            comparison_values.append((f"Actual {prediction_target_year} Wins", actual_selected_year_wins))
+
         comparison_df = pd.DataFrame(comparison_values, columns=["Win View", "Wins"]).dropna()
         if not comparison_df.empty:
             fig = px.bar(
@@ -1935,157 +2541,251 @@ with tab_tool:
                 x="Win View",
                 y="Wins",
                 color="Win View",
-                color_discrete_sequence=[team_secondary, team_primary, "#94A3B8"],
-                title=f"{selected_season} {selected_label}: Following-Season Projection",
+                color_discrete_sequence=[team_secondary, team_primary],
+                title=f"{selected_label}: {prediction_target_year} Regular-Season Projection",
                 labels={"Win View": "Win View", "Wins": "Wins"},
             )
-            fig.update_traces(texttemplate="%{y:.1f}", textposition="outside", showlegend=False)
-            st.plotly_chart(chart_layout(fig, height=380, y_title="Wins"), use_container_width=True)
-            render_caption(
-                "The projection should be read as a range, not an exact number. The model does not know future injuries, quarterback changes, coaching changes, or roster movement."
+            max_chart_wins = pd.to_numeric(comparison_df["Wins"], errors="coerce").max()
+            y_max = max(18, float(max_chart_wins) + 2.0) if pd.notna(max_chart_wins) else 18
+
+            fig.update_traces(
+                texttemplate="%{y:.1f}",
+                textposition="outside",
+                cliponaxis=False,
+                showlegend=False,
+                width=0.42,
+            )
+            fig.update_yaxes(range=[0, y_max])
+            fig.update_layout(showlegend=False)
+
+            st.plotly_chart(
+                chart_layout(fig, height=430, y_title="Wins", accent=team_primary),
+                use_container_width=True,
             )
 
+        if model_bundle.get("available"):
+            with st.expander("Model check"):
+                feature_text = ", ".join(display_label(feature) for feature in model_bundle.get("features", []))
+                within_two = model_bundle.get("metrics", {}).get("within_two_wins")
+                within_two_line = f"<br>Within two wins: {within_two * 100:.1f}%." if within_two is not None and pd.notna(within_two) else ""
+                st.markdown(
+                    f"""
+<div class="predict-card explain-box">
+    The regular-season model uses: {feature_text}.
+    <br><br>
+    Best rolling-backtest model: {model_bundle['metrics']['best_model_name']}.
+    <br>Rolling MAE: {model_bundle['metrics']['model_mae']:.2f} wins.
+    Simple previous-wins baseline MAE: {model_bundle['metrics']['baseline_mae']:.2f} wins.
+    {within_two_line}
+</div>
+""",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.info(model_bundle.get("message", "The regular-season model could not be trained from the available files."))
 
-with tab_details:
-    st.markdown('<div class="section-title">Model Details</div>', unsafe_allow_html=True)
-    render_takeaway(
-        "This section explains what the model uses, how it was tested, and why the results should be treated as exploratory."
-    )
 
-    if model_bundle.get("available"):
-        tested_text = (
-            f"Earlier seasons ({min(model_bundle['train_seasons'])}-{max(model_bundle['train_seasons'])}) are used to train the model. "
-            f"Later seasons ({min(model_bundle['test_seasons'])}-{max(model_bundle['test_seasons'])}) are held out to test whether the model works on seasons it has not seen."
+with tab_playoffs:
+    st.markdown('<div class="section-title">Playoffs Predictor Tool</div>', unsafe_allow_html=True)
+
+    playoff_season = selected_season
+    playoff_slice = model_df[model_df["season"] == playoff_season].copy()
+    playoff_selected_label = selected_label
+    playoff_selected_team = selected_team
+
+    playoff_rows = playoff_slice[playoff_slice["team"] == playoff_selected_team]
+    playoff_theme = get_team_theme(playoff_selected_team, team_theme_lookup)
+    team_primary = playoff_theme["primary"]
+    team_secondary = playoff_theme["secondary"]
+
+    if playoff_rows.empty:
+        st.info(
+            f"The {playoff_season} playoff predictor will unlock after the {playoff_season} regular season exists in the model data. "
+            "Postseason predictions use the current selected season only, not the prior season."
         )
-        mae_text = f"If MAE is {model_bundle['metrics']['model_mae']:.1f}, the model is usually off by about {model_bundle['metrics']['model_mae']:.1f} wins."
     else:
-        tested_text = model_bundle.get("message", "The model could not be tested from the available files.")
-        mae_text = "MAE is unavailable because the model could not be trained."
+        playoff_row = playoff_rows.iloc[0]
+        season_complete = row_has_completed_regular_season(playoff_row, playoff_season)
+        actual_playoff_games = pd.to_numeric(playoff_row.get("postseason_games"), errors="coerce")
+        actual_playoff_wins = playoff_row.get("postseason_wins")
 
-    st.markdown(
-        f"""
-<div class="predict-card explain-box">
-    <div class="explain-title">What the Model Is Trying to Predict</div>
-    The model uses a team's selected regular-season profile to estimate how many games it may win the following regular season.
-</div>
-<div class="predict-card explain-box">
-    <div class="explain-title">How the Model Was Tested</div>
-    Earlier seasons are used to train the model. Later seasons are held out to test whether the model works on seasons it has not seen.
-    <br><br>{tested_text}
-</div>
-<div class="predict-card explain-box">
-    <div class="explain-title">How to Read the Error</div>
-    {mae_text} Lower MAE is better. Accuracy on the 10+ win classifier is useful context, but it can be misleading if most teams fall into one class.
-</div>
-""",
-        unsafe_allow_html=True,
-    )
-
-    st.markdown('<div class="section-title">What the Model Uses</div>', unsafe_allow_html=True)
-    available_features = set(model_bundle.get("features", get_feature_candidates(model_df)))
-    feature_groups = {
-        "Overall Team Quality": ["current_wins", "gini_score", "point_diff_per_game", "success_margin"],
-        "Unit Strength": ["offense_estat", "defense_estat", "offense_rank", "defense_rank", "balance_gap"],
-        "Context and Volatility": ["turnover_margin_per_game", "penalty_yards_margin_per_game", "schedule_strength", "sos_rank"],
-    }
-    group_cards = []
-    for group_title, group_features in feature_groups.items():
-        readable_items = [display_label(feature) for feature in group_features if feature in available_features]
-        if not readable_items:
-            readable_items = ["No supported fields available in the current files"]
-        item_html = "".join(f"<li>{item}</li>" for item in readable_items)
-        group_cards.append(
-            f"""
-<div class="predict-card feature-group-card">
-    <div class="feature-group-title">{group_title}</div>
-    <ul class="feature-list">{item_html}</ul>
-</div>
-"""
-        )
-    st.markdown(f"<div class='feature-group-grid'>{''.join(group_cards)}</div>", unsafe_allow_html=True)
-    render_caption(
-        "The model uses selected-season traits only. It does not use following-season wins or future results as inputs."
-    )
-
-    with st.expander("Technical column names"):
-        feature_names = [display_label(feature) for feature in model_bundle.get("features", get_feature_candidates(model_df))]
-        technical_features = pd.DataFrame(
-            {
-                "Readable Feature": feature_names,
-                "Technical Column Name": model_bundle.get("features", get_feature_candidates(model_df)),
-            }
-        )
-        st.dataframe(technical_features, hide_index=True, use_container_width=True)
-
-    if model_bundle.get("available") and model_bundle.get("class_metrics"):
-        st.markdown('<div class="section-title">10+ Win Classifier</div>', unsafe_allow_html=True)
-        st.markdown(
-            """
-<div class="predict-card explain-box">
-    The classifier estimates whether a team is likely to win at least 10 games the following season.
-    It should be treated as a rough signal, not a playoff guarantee.
+        if not season_complete:
+            st.info(
+                f"The {playoff_season} postseason predictor is locked until the regular season is complete. "
+                "This keeps the playoff model honest because it uses current-year regular-season stats and results."
+            )
+        elif pd.isna(actual_playoff_games) or float(actual_playoff_games) <= 0:
+            metric_cols = st.columns(4)
+            with metric_cols[0]:
+                render_metric_card(
+                    f"{playoff_season} Wins",
+                    win_text(playoff_row.get("current_wins"), 0),
+                    "Final regular-season wins",
+                    accent=team_primary,
+                )
+            with metric_cols[1]:
+                render_metric_card(
+                    "Postseason Status",
+                    "Did not qualify",
+                    "No playoff games recorded",
+                    accent=team_secondary,
+                )
+            with metric_cols[2]:
+                render_metric_card(
+                    "Projected Playoff Wins",
+                    "0",
+                    "No postseason path",
+                    accent=team_primary,
+                )
+            with metric_cols[3]:
+                render_metric_card(
+                    "Chance of a Playoff Win",
+                    "0.0%",
+                    "Did not reach playoffs",
+                    accent=team_secondary,
+                )
+            st.markdown(
+                f"""
+<div class="prediction-summary">
+    <div class="predict-card profile-panel" style="border-left-color:{team_primary};">
+        <div class="team-accent-badge" style="background:{team_primary};">{playoff_season} Playoff Profile</div>
+        <div class="profile-heading">{playoff_selected_label}</div>
+        <div class="profile-body">This team did not qualify for the postseason, so the playoff projection is not run as an active playoff-team forecast.</div>
+    </div>
+    <div class="predict-card profile-panel" style="border-left-color:{team_secondary};">
+        <div class="team-accent-badge" style="background:{team_secondary};">Playoff Outlook</div>
+        <div class="profile-heading">Season ended before playoffs</div>
+        <div class="profile-body">The postseason model is designed to evaluate completed regular-season playoff profiles, not future playoff guesses before qualification is known.</div>
+    </div>
 </div>
 """,
-            unsafe_allow_html=True,
-        )
-        cm = model_bundle["class_metrics"]["confusion_matrix"]
-        cm_df = pd.DataFrame(
-            cm,
-            index=["Actual Under 10", "Actual 10+"],
-            columns=["Predicted Under 10", "Predicted 10+"],
-        )
-        metric_cols = st.columns([1, 2])
-        with metric_cols[0]:
-            render_metric_card("Classifier Accuracy", percent_text(model_bundle["class_metrics"]["accuracy"]), "Held-out seasons")
-        with metric_cols[1]:
-            st.dataframe(cm_df, use_container_width=True)
-        render_caption(
-            "Accuracy can be misleading if one class is much more common, so this table shows where the classifier was right and wrong."
-        )
+                unsafe_allow_html=True,
+            )
+        else:
+            projected_playoff_wins, playoff_win_probability = get_playoff_prediction_for_row(playoff_row, playoff_model_bundle)
+            projected_playoff_wins = max(0, min(4, projected_playoff_wins)) if projected_playoff_wins is not None else None
+            playoff_mae = playoff_model_bundle.get("metrics", {}).get("playoff_team_mae") if playoff_model_bundle.get("available") else None
+            if playoff_mae is None:
+                playoff_mae = playoff_model_bundle.get("metrics", {}).get("model_mae") if playoff_model_bundle.get("available") else None
+            playoff_range = "Not available yet"
+            if projected_playoff_wins is not None and playoff_mae is not None:
+                lower_bound = max(0, round(projected_playoff_wins - playoff_mae))
+                upper_bound = min(4, round(projected_playoff_wins + playoff_mae))
+                playoff_range = f"{lower_bound} to {upper_bound} playoff wins"
 
-    notes = build_notes.copy()
-    if skipped_columns:
-        readable_skips = ", ".join(display_label(column) for column in skipped_columns)
-        notes.append(f"Some fields were missing or had to be derived around: {readable_skips}.")
-    if not notes:
-        notes.append("All required core modeling fields were available.")
+            outlook = playoff_outlook_label(playoff_row, projected_playoff_wins, playoff_win_probability)
+            playoff_reasons = playoff_profile_interpretation(playoff_row)
+            playoff_reasons_html = "".join(f"<li>{reason}</li>" for reason in playoff_reasons)
 
-    st.markdown('<div class="section-title">Future Expansion: Postseason Predictor</div>', unsafe_allow_html=True)
-    postseason_note = (
-        "The project files include postseason rows, so a future tab could study whether regular-season Gini profiles predict playoff wins, playoff advancement, or Super Bowl paths. "
-        "I am keeping that as a future expansion here so this page stays focused on following regular-season wins."
-        if postseason_rows_available
-        else "A postseason prediction model could be added later, but this page currently focuses on following regular-season wins because postseason rows are not clearly available in the current modeling dataset."
-    )
-    st.markdown(
-        f"""
-<div class="predict-card explain-box">
-    {postseason_note}
+            metric_cols = st.columns(5)
+            with metric_cols[0]:
+                render_metric_card(
+                    f"{playoff_season} Wins",
+                    win_text(playoff_row.get("current_wins"), 0),
+                    "Final regular-season wins",
+                    accent=team_primary,
+                )
+            with metric_cols[1]:
+                render_metric_card(
+                    "Projected Playoff Wins",
+                    win_text(projected_playoff_wins, 1) if projected_playoff_wins is not None else "Model unavailable",
+                    playoff_model_bundle["metrics"]["best_model_name"] if playoff_model_bundle.get("available") else "Projection unavailable",
+                    accent=team_secondary,
+                )
+            with metric_cols[2]:
+                render_metric_card("Likely Range", playoff_range, "Uses playoff-team backtest error", accent=team_primary)
+            with metric_cols[3]:
+                render_metric_card(
+                    "Chance of a Playoff Win",
+                    percent_text(playoff_win_probability),
+                    "At least one postseason win",
+                    accent=team_secondary,
+                )
+            with metric_cols[4]:
+                render_metric_card(
+                    "Actual Playoff Result",
+                    f"{win_text(actual_playoff_wins, 0)} wins",
+                    f"{win_text(actual_playoff_games, 0)} games played",
+                    accent=team_primary,
+                )
+
+            st.markdown(
+                f"""
+<div class="prediction-summary">
+    <div class="predict-card profile-panel" style="border-left-color:{team_primary};">
+        <div class="team-accent-badge" style="background:{team_primary};">{playoff_season} Playoff Profile</div>
+        <div class="profile-heading">{playoff_selected_label}</div>
+        <div class="profile-body">
+            <ul>{playoff_reasons_html}</ul>
+        </div>
+    </div>
+    <div class="predict-card profile-panel" style="border-left-color:{team_secondary};">
+        <div class="team-accent-badge" style="background:{team_secondary};">Playoff Outlook</div>
+        <div class="profile-heading">{outlook}</div>
+        <div class="profile-body">
+            The playoff model uses the selected season's completed regular-season profile only. It stays locked before the season is complete so the forecast does not mix prior-year assumptions with current-year playoff outcomes.
+        </div>
+    </div>
 </div>
 """,
-        unsafe_allow_html=True,
-    )
+                unsafe_allow_html=True,
+            )
 
-    st.markdown('<div class="section-title">Notes and Limitations</div>', unsafe_allow_html=True)
-    limitations = [
-        "Injuries, quarterback changes, coaching changes, roster turnover, schedule changes, and offseason events are not fully captured.",
-        "This is an exploratory football research model, not betting advice.",
-        "The model avoids using following-season results as features.",
-        "The current page focuses on following regular-season wins.",
-    ]
-    details_text = "".join(f"<li>{item}</li>" for item in notes + limitations)
-    st.markdown(
-        f"""
+            comparison_values = [
+                ("Projected Playoff Wins", projected_playoff_wins),
+            ]
+            if pd.notna(actual_playoff_wins):
+                comparison_values.append(("Actual Playoff Wins", actual_playoff_wins))
+            comparison_df = pd.DataFrame(comparison_values, columns=["Playoff View", "Wins"]).dropna()
+            if not comparison_df.empty:
+                fig = px.bar(
+                    comparison_df,
+                    x="Playoff View",
+                    y="Wins",
+                    color="Playoff View",
+                    color_discrete_sequence=[team_secondary, team_primary],
+                    title=f"{playoff_selected_label}: Playoff Projection",
+                    labels={"Playoff View": "Playoff View", "Wins": "Playoff Wins"},
+                )
+            max_chart_wins = pd.to_numeric(comparison_df["Wins"], errors="coerce").max()
+            y_max = max(4.5, float(max_chart_wins) + 0.8) if pd.notna(max_chart_wins) else 4.5
+
+            fig.update_traces(
+                texttemplate="%{y:.1f}",
+                textposition="outside",
+                cliponaxis=False,
+                showlegend=False,
+                width=0.42,
+            )
+            fig.update_yaxes(range=[0, y_max])
+            fig.update_layout(showlegend=False)
+
+            st.plotly_chart(
+                chart_layout(fig, height=420, y_title="Playoff Wins", accent=team_primary),
+                use_container_width=True,
+            )
+
+            if playoff_model_bundle.get("available"):
+                with st.expander("Model check"):
+                    feature_text = ", ".join(display_label(feature) for feature in playoff_model_bundle.get("features", []))
+                    auc_text = playoff_model_bundle.get("class_metrics", {}).get("auc")
+                    auc_line = f"<br>Playoff-win classifier AUC: {auc_text:.2f}." if auc_text is not None and pd.notna(auc_text) else ""
+                    st.markdown(
+                        f"""
 <div class="predict-card explain-box">
-    <div class="explain-title">Notes</div>
-    <ul>{details_text}</ul>
+    The playoff model uses: {feature_text}.
+    <br><br>
+    Best rolling-backtest playoff model: {playoff_model_bundle['metrics']['best_model_name']}.
+    <br>All-team playoff-wins MAE: {playoff_model_bundle['metrics']['model_mae']:.2f}.
+    <br>Playoff-team MAE: {playoff_model_bundle['metrics']['playoff_team_mae']:.2f}.
+    Simple zero-win baseline MAE: {playoff_model_bundle['metrics']['baseline_mae']:.2f}.
+    {auc_line}
 </div>
 """,
-        unsafe_allow_html=True,
-    )
-    render_caption(
-        "These limitations are why the page should be read as football research and context, not a guaranteed forecasting tool."
-    )
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.info(playoff_model_bundle.get("message", "The playoff model could not be trained from the available files."))
 
 
 st.markdown("</div>", unsafe_allow_html=True)

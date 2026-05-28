@@ -78,102 +78,102 @@ def render_finding(title, body):
 
 model_stages = [
     {
-        "label": "2022 | Foundation",
-        "name": "Original Gini Stat",
-        "purpose": "The first version was built to answer a simple football question: which teams were actually playing well beyond their record and final scores?",
+        "label": "Foundation | Original Gini/EStat",
+        "name": "Turning Team Quality Into a Readable Score",
+        "purpose": "The project started with one question: how can NFL teams be compared in a way that sees beyond wins, losses, and final scores?",
         "findings": [
-            "Wins and losses can hide how well a team really played.",
-            "A team can look strong in the standings while relying on fragile advantages.",
-            "A team can look ordinary in the standings while showing stronger underlying performance.",
+            "Records can hide whether a team is actually controlling games.",
+            "Efficiency, point differential, turnovers, penalties, and schedule context all change the story.",
+            "A single score is most useful when users can still see the ingredients behind it.",
         ],
         "impact": [
-            "The model needed to care about context, not just outcomes.",
-            "Team quality had to include both scoreboard results and what happened underneath them.",
-            "The Gini project became a way to explain football performance more clearly.",
+            "Created the EStat/Gini foundation used across the site.",
+            "Made season-relative scoring a core design choice so teams are judged against their actual league year.",
+            "Set the goal for every later page: explain football performance clearly, not just numerically.",
         ],
     },
     {
-        "label": "2023 | Simplification",
-        "name": "Simple Gini Stat",
-        "purpose": "The simple version made the model easier to read by focusing on a cleaner overall view of team quality.",
+        "label": "Core Tool | Gini Dashboard",
+        "name": "The Main Team Evaluation Workspace",
+        "purpose": "The Gini Dashboard became the home base for evaluating any team-season, comparing rankings, and testing different football philosophies.",
         "findings": [
-            "Balanced teams usually created more believable profiles than teams carried by only one side of the ball.",
-            "Offense and defense needed to be visible separately before being understood together.",
-            "A single number is useful only when users can still see what is driving it.",
+            "Users need the top-line score plus the offense, defense, schedule, and weekly game details behind it.",
+            "Custom weights make the model more useful because different users value football ingredients differently.",
+            "Team logos, colors, charts, and sortable tables make the model easier to explore.",
         ],
         "impact": [
-            "The dashboard needed top-line rankings plus component views.",
-            "Offense and defense became central public-facing pillars.",
-            "The model moved toward a clearer story instead of only a bigger spreadsheet.",
+            "Established the main ranking table, offense/defense chart, team deep dive, schedule, and roster view.",
+            "Kept the public model readable while preserving the deeper formulas underneath.",
+            "Turned the Gini score into an interactive evaluation tool instead of a static spreadsheet output.",
         ],
     },
     {
-        "label": "2024 | Expansion",
-        "name": "Pass and Run Splits",
-        "purpose": "The pass/run expansion explored how teams created value, not just whether they created value.",
+        "label": "Contender Tool | Super Square",
+        "name": "Studying Championship Profiles",
+        "purpose": "Super Square was added to answer a different question: which regular-season profiles look like the profiles past Super Bowl champions tended to have?",
         "findings": [
-            "Passing and rushing details explain matchup pressure and team identity.",
-            "A team can be efficient overall while still having a clear weakness in how it wins.",
-            "Sub-scores are useful for scouting the shape of a team, but they should not overwhelm the main evaluation.",
+            "Championship teams usually show both broad control and at least one pressure point that can stress opponents.",
+            "A contender profile is stronger when it combines Gini/EStat checkpoints, point differential, success margin, EPA, and unit strength.",
+            "Some teams sit close to the profile without fully clearing it, which makes cusp teams useful to track.",
         ],
         "impact": [
-            "The public dashboard kept team details and roster context available without making them the whole model.",
-            "The model history preserved passing and rushing ideas as a deeper analysis layer.",
-            "The current dashboard favors cleaner interpretation over showing every internal split.",
+            "Created a championship-contender profile tool separate from the main rankings.",
+            "Gave users a way to compare a selected season against historical champion patterns.",
+            "Made the site broader than team ranking by adding a postseason-contender lens.",
         ],
     },
     {
-        "label": "2024 | Context",
-        "name": "Advanced Gini Stat",
-        "purpose": "The advanced version added more context around schedule difficulty, team details, and results context.",
+        "label": "Current-Moment Tool | Live Leaderboard",
+        "name": "Live Roster and Market-Style Ranking",
+        "purpose": "The Live Leaderboard was built for the current NFL moment, where roster strength, projected wins, live source refreshes, and movement matter more than historical season browsing.",
         "findings": [
-            "Schedule difficulty can completely change how a season should be judged.",
-            "Opponent context is one of the biggest differences between a surface-level ranking and a useful one.",
-            "More inputs can improve the picture, but too much detail makes the model harder to explain publicly.",
+            "A current team rating needs roster context, not just last season's performance.",
+            "Local nflverse/nflreadpy source files can support refreshed schedules, rosters, injuries, snap counts, transactions, and player production.",
+            "Movement is most useful when it compares the current board to the most recent live or weekly snapshot.",
         ],
         "impact": [
-            "Schedule strength became a core part of the dashboard conversation.",
-            "The model needed a public version that was powerful but easier to understand.",
-            "The advanced work pushed the current dashboard toward a clearer public presentation.",
+            "Added Live Market Score, roster score, projected wins, quadrant probabilities, and refresh movement.",
+            "Separated current-moment ranking from the historical Gini Dashboard.",
+            "Created weekly history while still allowing the page to refresh local data every five minutes.",
         ],
     },
     {
-        "label": "2025 | Current",
-        "name": "Gini Metric",
-        "purpose": "The current dashboard turns the project into an interactive tool for exploring teams, seasons, and football philosophies.",
+        "label": "Forecasting Tool | Predictive Model",
+        "name": "Regular-Season and Playoff Outlooks",
+        "purpose": "The Predictive Model extends the platform from evaluation into forecasting by using completed team profiles to project wins and postseason outlooks.",
         "findings": [
-            "Users should be able to test different football beliefs without rebuilding the model.",
-            "A clean dashboard can make advanced team evaluation easier to trust.",
-            "The best public version explains what the numbers mean in clear football language.",
+            "Forecasts are clearer when the page separates prediction target year from feature year.",
+            "Expected wins, win pace, regression risk, and improvement signals help explain why a forecast moves.",
+            "The playoff predictor should stay locked until the regular season is complete so it does not mix future guesses with current-year playoff outcomes.",
         ],
         "impact": [
-            "The site now separates dashboard terms, model history, and team exploration.",
-            "Custom weights let users explore how rankings change under different priorities.",
-            "The Gini Metric is presented as a football evaluation system, not just a spreadsheet output.",
+            "Added a regular-season wins predictor with likely range and model-result language.",
+            "Added a playoff predictor that evaluates completed regular-season playoff profiles.",
+            "Completed the site's four-part structure: evaluate, rank live, profile contenders, and forecast outcomes.",
         ],
     },
 ]
 
 key_findings = [
     (
-        "Record is not the full story",
-        "Standings matter, but they can miss efficiency, opponent difficulty, turnovers, game script, and hidden yardage.",
+        "The tools answer different questions",
+        "Gini Dashboard evaluates team quality, Live Leaderboard ranks the current market, Super Square studies contender profiles, and Predictive Model forecasts future outcomes.",
     ),
     (
-        "Context changes interpretation",
-        "A strong performance against a strong opponent should not be read the same way as the same surface result against weaker competition.",
+        "Evaluation comes before prediction",
+        "The forecasting page is stronger because it starts from the same team-quality language built in the Gini and Super Square work.",
     ),
     (
-        "Balance matters",
-        "Teams with credible offense and defense tend to create more stable profiles than teams relying too heavily on one phase.",
+        "Current context matters",
+        "The Live Leaderboard exists because roster movement, injuries, depth, and refreshed source files can change how a team should be viewed today.",
     ),
     (
-        "Details explain the result",
-        "Passing, rushing, penalties, turnovers, and schedule context help explain how a team got to its result.",
+        "Contender profile is not the same as ranking",
+        "Super Square is not just a top-team list; it asks whether a team matches the historical shape of championship contenders.",
     ),
     (
-        "Public clarity matters",
-        "The dashboard should help users understand the model's football meaning quickly and confidently.",
+        "Plain language is part of the model",
+        "The site works best when the numbers are paired with labels, cards, tables, and explanations that a normal football fan can read quickly.",
     ),
 ]
 
@@ -298,7 +298,7 @@ st.markdown(
 }}
 
 .history-title {{
-    font-size: 2.55rem;
+    font-size: clamp(2.05rem, 5vw, 2.55rem);
     line-height: 1.05;
     font-weight: 950;
     margin-bottom: 0.9rem;
@@ -486,12 +486,15 @@ st.markdown(
 }}
 
 @media screen and (max-width: 800px) {{
-    .history-hero {{
-        padding: 2rem;
+    .history-page {{
+        margin-top: -0.75rem;
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
     }}
 
-    .history-title {{
-        font-size: 2.05rem;
+    .history-hero {{
+        padding: 1.35rem;
+        border-radius: 16px;
     }}
 
     .stage-grid,
@@ -511,13 +514,13 @@ st.markdown('<div class="history-page">', unsafe_allow_html=True)
 st.markdown(
     """
 <div class="history-hero">
-    <div class="history-kicker">Gini Metric Documentation</div>
+    <div class="history-kicker">Football Analytics Platform</div>
     <div class="history-title">Model History</div>
     <div class="history-text">
-        The Gini Metric grew out of a long-running question: how can NFL teams be compared
-        in a way that respects record, efficiency, opponent quality, team details, and context?
-        This page explains what each stage of the project taught and how those lessons shaped
-        the current dashboard.
+        The Gini Metric started as a team-quality score, then grew into a full NFL analytics
+        platform. The site now has four connected tools: the Gini Dashboard for team evaluation,
+        Live Leaderboard for current-moment ranking, Super Square for championship-profile study,
+        and Predictive Model for regular-season and playoff outlooks.
     </div>
 </div>
 """,
@@ -528,8 +531,9 @@ st.markdown(
     """
 <div class="section-title">Evolution of the Model</div>
 <div class="section-intro">
-    Each version of the project answered a different football question. The result is a dashboard
-    that is easier to explore, easier to explain, and better suited for comparing teams across seasons.
+    Each stage answered a different football question. Together, the tools move from evaluating
+    what happened, to ranking the current league, to identifying contender profiles, to forecasting
+    what could happen next.
 </div>
 """,
     unsafe_allow_html=True,
@@ -542,7 +546,7 @@ st.markdown(
     """
 <div class="section-title">What the Models Taught Me</div>
 <div class="section-intro">
-    These are the public-facing lessons that shaped the current Gini Metric dashboard.
+    These are the user-facing lessons that shaped the current four-page analytics experience.
 </div>
 <div class="finding-grid">
 """,
