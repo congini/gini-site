@@ -2056,7 +2056,7 @@ html, body {{
 /* ── Card row ── */
 .status-strip {{
     display:grid;
-    grid-template-columns:minmax(560px, .96fr) minmax(650px, 1.04fr);
+    grid-template-columns:minmax(0, .96fr) minmax(0, 1.04fr);
     gap:1rem;
     align-items:stretch;
     padding:.85rem 1.55rem 1.35rem;
@@ -2064,7 +2064,7 @@ html, body {{
 
 .status-left {{
     display:grid;
-    grid-template-columns:140px 140px minmax(330px, 1fr);
+    grid-template-columns:minmax(112px, .55fr) minmax(112px, .55fr) minmax(260px, 1.35fr);
     gap:.72rem;
     align-items:stretch;
 }}
@@ -2074,6 +2074,17 @@ html, body {{
     grid-template-columns:repeat(4, minmax(0, 1fr));
     gap:.72rem;
     align-items:stretch;
+}}
+
+.header-box,
+.status-strip,
+.status-left,
+.status-right,
+.status-card,
+.headline-card {{
+    box-sizing:border-box;
+    max-width:100%;
+    min-width:0;
 }}
 
 /* ── Left cards ── */
@@ -2139,6 +2150,10 @@ html, body {{
     min-width:0;
 }}
 
+.live-time-row > * {{
+    min-width:0;
+}}
+
 .live-clock-pill,
 .next-refresh-pill {{
     display:inline-flex;
@@ -2186,7 +2201,7 @@ html, body {{
         inset 0 1px 0 rgba(255,255,255,.16),
         0 12px 24px rgba(0,0,0,.12);
     backdrop-filter:blur(16px);
-    overflow:visible;
+    overflow:hidden;
     transition:transform .18s ease, box-shadow .18s ease, border-color .18s ease;
 }}
 
@@ -2378,13 +2393,13 @@ html, body {{
 }}
 
 /* ── Responsive ── */
-@media(max-width:1180px) {{
+@media(max-width:1320px) {{
     .status-strip {{
         grid-template-columns:1fr;
     }}
 
     .status-left {{
-        grid-template-columns:140px 140px minmax(280px,1fr);
+        grid-template-columns:minmax(112px, .55fr) minmax(112px, .55fr) minmax(260px, 1.35fr);
     }}
 }}
 
@@ -2408,7 +2423,7 @@ html, body {{
 
     .status-left,
     .status-right {{
-        grid-template-columns:1fr 1fr;
+        grid-template-columns:repeat(2, minmax(0, 1fr));
     }}
 
     .status-live {{

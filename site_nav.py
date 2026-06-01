@@ -57,14 +57,47 @@ html,
 body,
 .stApp,
 [data-testid="stAppViewContainer"] {{
+    width: 100% !important;
     max-width: 100%;
     overflow-x: hidden;
+}}
+
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"],
+section.main,
+main {{
+    width: 100% !important;
+    max-width: 100vw !important;
+    overflow-x: hidden !important;
+    overflow-x: clip !important;
+}}
+
+.block-container,
+[data-testid="stVerticalBlock"],
+[data-testid="stHorizontalBlock"],
+iframe {{
+    max-width: 100% !important;
 }}
 
 img,
 svg,
 canvas {{
     max-width: 100%;
+}}
+
+.bg-canvas,
+.team-bg-canvas,
+.predict-bg {{
+    position: fixed !important;
+    inset: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    max-width: 100vw !important;
+    max-height: 100vh !important;
+    overflow: hidden !important;
+    pointer-events: none !important;
+    contain: layout paint;
 }}
 
 div[data-testid="stPlotlyChart"] {{
