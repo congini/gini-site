@@ -522,7 +522,7 @@ def read_last_live_source_refresh_status():
 
 def refresh_live_sources_if_needed(selected_season):
     """
-    Attempts to refresh nflverse-backed live source CSVs hourly.
+    Attempts to refresh nflverse-backed live source CSVs every 5 minutes.
     If the app skips because it refreshed recently, it still shows the last known status.
     """
     if not should_refresh_live_sources():
@@ -1951,32 +1951,6 @@ html, body {{
     font-family:"Inter", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, Arial, sans-serif;
 }}
 
-@keyframes headerLift {{
-    from {{ opacity:0; transform:translateY(12px) scale(.992); }}
-    to {{ opacity:1; transform:translateY(0) scale(1); }}
-}}
-
-@keyframes softSheen {{
-    0% {{ background-position:0% 50%; }}
-    50% {{ background-position:100% 50%; }}
-    100% {{ background-position:0% 50%; }}
-}}
-
-@keyframes livePulse {{
-    0%, 100% {{ box-shadow:0 10px 22px rgba(0,0,0,.16), 0 0 0 0 rgba(241,90,36,.20); }}
-    50% {{ box-shadow:0 12px 26px rgba(0,0,0,.18), 0 0 0 7px rgba(241,90,36,0); }}
-}}
-
-@keyframes logoFloat {{
-    0%, 100% {{ transform:translateY(0); }}
-    50% {{ transform:translateY(-4px); }}
-}}
-
-@keyframes arrowNudge {{
-    0%, 100% {{ transform:translate(0,0); }}
-    50% {{ transform:translate(2px,-2px); }}
-}}
-
 /* ── Combined header box ── */
 .header-box {{
     position:relative;
@@ -1988,20 +1962,6 @@ html, body {{
         linear-gradient(135deg, #07111f, #172033 58%, #263447);
     box-shadow:0 18px 42px rgba(15,23,42,.16);
     overflow:hidden;
-    animation:headerLift .48s ease-out both;
-}}
-
-.header-box::after {{
-    content:"";
-    position:absolute;
-    inset:0;
-    pointer-events:none;
-    background:
-        linear-gradient(115deg, transparent 0%, rgba(255,255,255,.16) 40%, transparent 58%),
-        linear-gradient(135deg, rgba(255,255,255,.08), transparent 45%);
-    background-size:220% 100%, 100% 100%;
-    animation:softSheen 8s ease-in-out infinite;
-    opacity:.64;
 }}
 
 .header-box::before {{
@@ -2056,7 +2016,7 @@ html, body {{
 /* ── Card row ── */
 .status-strip {{
     display:grid;
-    grid-template-columns:minmax(0, .96fr) minmax(0, 1.04fr);
+    grid-template-columns:minmax(500px, .92fr) minmax(650px, 1.08fr);
     gap:1rem;
     align-items:stretch;
     padding:.85rem 1.55rem 1.35rem;
@@ -2064,7 +2024,7 @@ html, body {{
 
 .status-left {{
     display:grid;
-    grid-template-columns:minmax(112px, .55fr) minmax(112px, .55fr) minmax(260px, 1.35fr);
+    grid-template-columns:140px 140px minmax(250px, 1fr);
     gap:.72rem;
     align-items:stretch;
 }}
@@ -2074,17 +2034,6 @@ html, body {{
     grid-template-columns:repeat(4, minmax(0, 1fr));
     gap:.72rem;
     align-items:stretch;
-}}
-
-.header-box,
-.status-strip,
-.status-left,
-.status-right,
-.status-card,
-.headline-card {{
-    box-sizing:border-box;
-    max-width:100%;
-    min-width:0;
 }}
 
 /* ── Left cards ── */
@@ -2106,16 +2055,6 @@ html, body {{
         inset 0 1px 0 rgba(255,255,255,.13),
         0 10px 24px rgba(0,0,0,.10);
     backdrop-filter:blur(16px);
-    transition:transform .18s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease;
-}}
-
-.status-card:hover {{
-    transform:translateY(-2px);
-    border-color:rgba(255,255,255,.28);
-    background:rgba(255,255,255,.13);
-    box-shadow:
-        inset 0 1px 0 rgba(255,255,255,.16),
-        0 14px 30px rgba(0,0,0,.14);
 }}
 
 .status-live {{
@@ -2150,20 +2089,15 @@ html, body {{
     min-width:0;
 }}
 
-.live-time-row > * {{
-    min-width:0;
-}}
-
 .live-clock-pill,
 .next-refresh-pill {{
     display:inline-flex;
     align-items:center;
-    justify-content:center;
     box-sizing:border-box;
     max-width:100%;
     min-width:0;
     min-height:32px;
-    padding:.28rem .86rem;
+    padding:0 .86rem;
     border-radius:999px;
     color:#FFFFFF;
     background:rgba(255,255,255,.14);
@@ -2173,11 +2107,10 @@ html, body {{
     overflow-wrap:anywhere;
     font-size:clamp(.78rem, 1.4vw, .88rem);
     font-weight:850;
-    animation:livePulse 3.8s ease-in-out infinite;
 }}
 
 .next-refresh-pill {{
-    background:linear-gradient(135deg, rgba(241,90,36,.28), rgba(0,115,183,.20));
+    background:linear-gradient(135deg, rgba(241,90,36,.24), rgba(0,115,183,.18));
     border-color:rgba(255,255,255,.28);
 }}
 
@@ -2186,11 +2119,11 @@ html, body {{
     position:relative;
     z-index:1;
     display:grid;
-    grid-template-rows:18px 76px minmax(34px, auto) 32px;
+    grid-template-rows:18px 64px minmax(30px, auto) 30px;
     align-items:center;
     justify-items:center;
     text-align:center;
-    min-height:148px;
+    min-height:132px;
     padding:.76rem .68rem .86rem;
     border-radius:15px;
     background:
@@ -2201,16 +2134,7 @@ html, body {{
         inset 0 1px 0 rgba(255,255,255,.16),
         0 12px 24px rgba(0,0,0,.12);
     backdrop-filter:blur(16px);
-    overflow:hidden;
-    transition:transform .18s ease, box-shadow .18s ease, border-color .18s ease;
-}}
-
-.headline-card:hover {{
-    transform:translateY(-3px);
-    border-color:rgba(255,255,255,.30);
-    box-shadow:
-        inset 0 1px 0 rgba(255,255,255,.18),
-        0 16px 32px rgba(0,0,0,.16);
+    overflow:visible;
 }}
 
 .headline-card::before {{
@@ -2236,8 +2160,8 @@ html, body {{
 }}
 
 .headline-logo-wrap {{
-    width:72px;
-    height:72px;
+    width:60px;
+    height:60px;
     display:flex;
     align-items:center;
     justify-content:center;
@@ -2250,13 +2174,12 @@ html, body {{
     box-shadow:
         0 10px 20px rgba(0,0,0,.18),
         inset 0 1px 0 rgba(255,255,255,.85);
-    animation:logoFloat 6s ease-in-out infinite;
 }}
 
 .headline-logo {{
     display:block;
-    max-width:62px;
-    max-height:62px;
+    max-width:51px;
+    max-height:51px;
     object-fit:contain;
     object-position:center center;
     filter:drop-shadow(0 5px 7px rgba(15,23,42,.22)) saturate(1.08) contrast(1.04);
@@ -2365,7 +2288,6 @@ html, body {{
     background:rgba(255,255,255,.20);
     font-size:.80rem;
     line-height:1;
-    animation:arrowNudge 1.8s ease-in-out infinite;
 }}
 
 .movement-value {{
@@ -2393,13 +2315,13 @@ html, body {{
 }}
 
 /* ── Responsive ── */
-@media(max-width:1320px) {{
+@media(max-width:1180px) {{
     .status-strip {{
         grid-template-columns:1fr;
     }}
 
     .status-left {{
-        grid-template-columns:minmax(112px, .55fr) minmax(112px, .55fr) minmax(260px, 1.35fr);
+        grid-template-columns:140px 140px minmax(220px,1fr);
     }}
 }}
 
@@ -2423,38 +2345,13 @@ html, body {{
 
     .status-left,
     .status-right {{
-        grid-template-columns:repeat(2, minmax(0, 1fr));
-    }}
-
-    .status-live {{
-        grid-column:1 / -1;
+        grid-template-columns:1fr 1fr;
     }}
 
     .live-clock-pill,
     .next-refresh-pill {{
         flex:1 1 100%;
         justify-content:center;
-    }}
-}}
-
-@media(max-width:520px) {{
-    .status-left,
-    .status-right {{
-        grid-template-columns:1fr;
-    }}
-
-    .headline-card {{
-        min-height:138px;
-    }}
-}}
-
-@media (prefers-reduced-motion: reduce) {{
-    *,
-    *::before,
-    *::after {{
-        animation-duration:.01ms!important;
-        animation-iteration-count:1!important;
-        transition-duration:.01ms!important;
     }}
 }}
 </style>
@@ -2761,7 +2658,7 @@ def render_roster_tracker_plan(
 <p><b>Contracts file found:</b> {"Yes" if future_status.get("contracts") else "No"}</p>
 <p><b>Depth charts file found:</b> {"Yes" if future_status.get("depth_charts") else "No"}</p>
 <p><b>Snapshot file exists:</b> {"Yes" if snapshot_exists else "No"}</p>
-<p>This page uses the local roster file plus cached player production and injury data when available. Live-source cache checks are hourly and reread the latest local files when the page runs. Future transaction data can add cuts, trades, signings, and activations into the roster score.</p>
+<p>This page uses the local roster file plus cached player production and injury data when available. The leaderboard auto-refreshes every 5 minutes and rereads the latest local files. Future transaction data can add cuts, trades, signings, and activations into the roster score.</p>
 </div>
 """,
             unsafe_allow_html=True,

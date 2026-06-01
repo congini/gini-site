@@ -588,7 +588,8 @@ def render_scrollable_rankings_table(
     font-weight: 800;
   }}
   #{table_id} tbody tr.selected-row td:first-child {{
-    box-shadow: none;
+    border-left: 5px solid {secondary_color};
+    box-shadow: inset 3px 0 0 {primary_color};
   }}
   #{table_id} tbody tr.selected-row td:last-child {{
     border-right: 3px solid {primary_color};
@@ -914,8 +915,14 @@ st.markdown(
 }}
 
 .site-nav-link.active::after {{
-    content: none;
-    display: none;
+    content: "";
+    position: absolute;
+    left: 0.9rem;
+    right: 0.9rem;
+    bottom: 0.22rem;
+    height: 2px;
+    border-radius: 999px;
+    background: {selected_team_color};
 }}
 
 div[data-testid="stSelectbox"] label p {{
@@ -930,7 +937,6 @@ div[data-testid="stSelectbox"] label p {{
 }}
 
 div[data-testid="stHorizontalBlock"]:has(.dashboard-setup-card-marker) {{
-    position: relative;
     display: grid;
     grid-template-columns: minmax(0, 1.65fr) minmax(360px, 0.8fr);
     align-items: end;
@@ -939,21 +945,11 @@ div[data-testid="stHorizontalBlock"]:has(.dashboard-setup-card-marker) {{
     padding: 1rem 1.2rem 1.15rem 1.2rem;
     background: rgba(255,255,255,0.82);
     border: 1px solid rgba(15, 23, 42, 0.10);
+    border-left: 5px solid {selected_team_color};
     border-radius: 16px;
     box-shadow: 0 12px 28px rgba(15, 23, 42, 0.065);
     backdrop-filter: blur(9px);
     overflow: hidden;
-}}
-
-div[data-testid="stHorizontalBlock"]:has(.dashboard-setup-card-marker)::before {{
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 14px;
-    right: 14px;
-    height: 4px;
-    border-radius: 0 0 999px 999px;
-    background: linear-gradient(90deg, {selected_team_color}, {selected_team_color2});
 }}
 
 div[data-testid="stHorizontalBlock"]:has(.dashboard-setup-card-marker) > div {{
@@ -1004,6 +1000,7 @@ div[data-testid="stHorizontalBlock"]:has(.dashboard-setup-card-marker) div[data-
 div[data-testid="stExpander"] {{
     background: rgba(255,255,255,0.78) !important;
     border: 1px solid rgba(15, 23, 42, 0.10) !important;
+    border-left: 5px solid {selected_team_color} !important;
     border-radius: 16px !important;
     box-shadow: 0 12px 28px rgba(15, 23, 42, 0.065) !important;
     backdrop-filter: blur(9px);
@@ -1211,11 +1208,9 @@ h1, h2, h3, h4, h5, h6, p, label {{
     content: "";
     position: absolute;
     top: 0;
-    left: clamp(14px, 2vw, 22px);
-    right: clamp(14px, 2vw, 22px);
-    width: auto;
+    left: 0;
+    width: 100%;
     height: 5px;
-    border-radius: 0 0 999px 999px;
     background: linear-gradient(90deg, {selected_team_color}, {selected_team_color2});
 }}
 
@@ -1268,13 +1263,11 @@ h1, h2, h3, h4, h5, h6, p, label {{
 .hero-team-card::before {{
     content: "";
     position: absolute;
+    left: 0;
     top: 0;
-    left: 14px;
-    right: 14px;
-    width: auto;
-    height: 4px;
-    border-radius: 0 0 999px 999px;
-    background: linear-gradient(90deg, {selected_team_color}, {selected_team_color2});
+    width: 5px;
+    height: 100%;
+    background: linear-gradient(180deg, {selected_team_color}, {selected_team_color2});
     opacity: 0.95;
 }}
 
@@ -1498,6 +1491,7 @@ div[data-testid="stCheckbox"]:has(input:disabled) p {{
     overflow: hidden;
     background: rgba(255, 255, 255, 0.94);
     border: 1px solid rgba(15, 23, 42, 0.10);
+    border-left: 5px solid {selected_team_color};
     box-shadow: 0 12px 28px rgba(15, 23, 42, 0.075);
     padding: 0.95rem 1.05rem 0.98rem 1rem;
     border-radius: 14px;
@@ -1508,12 +1502,10 @@ div[data-testid="stCheckbox"]:has(input:disabled) p {{
 .metric-card::before {{
     content: "";
     position: absolute;
+    left: 5px;
     top: 0;
-    left: 14px;
-    right: 14px;
-    width: auto;
+    width: calc(100% - 5px);
     height: 4px;
-    border-radius: 0 0 999px 999px;
     background: linear-gradient(90deg, {selected_team_color2}, transparent);
     opacity: 0.75;
 }}
@@ -2212,6 +2204,7 @@ padding: 1rem 1.15rem;
 border-radius: 14px;
 background: rgba(255,255,255,0.58);
 border: 1px solid rgba(15, 23, 42, 0.10);
+border-left: 5px solid {selected_team_color};
 box-shadow: 0 10px 24px rgba(15, 23, 42, 0.055);
 backdrop-filter: blur(5px);
 ">
@@ -2499,6 +2492,7 @@ padding: 0.9rem 1.05rem;
 border-radius: 12px;
 background: #FFFFFF;
 border: 1px solid rgba(15, 23, 42, 0.10);
+border-left: 5px solid {selected_team_color};
 box-shadow: 0 8px 20px rgba(15, 23, 42, 0.055);
 font-size: 0.92rem;
 line-height: 1.6;
