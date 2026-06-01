@@ -1720,13 +1720,26 @@ st.markdown(
 }}
 
 .predict-card {{
+    position: relative;
     background: rgba(255,255,255,0.92);
     border: 1px solid rgba(15, 23, 42, 0.10);
-    border-left: 5px solid {PRIMARY};
     border-radius: 16px;
     box-shadow: 0 12px 28px rgba(15, 23, 42, 0.065);
     backdrop-filter: blur(9px);
     overflow: hidden;
+}}
+
+.predict-card::before {{
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 14px;
+    right: 14px;
+    height: 4px;
+    border-radius: 0 0 999px 999px;
+    background: linear-gradient(90deg, {PRIMARY}, {SECONDARY});
+    opacity: 0.9;
+    pointer-events: none;
 }}
 
 .metric-card {{
@@ -2122,11 +2135,11 @@ st.markdown(
     background: linear-gradient(90deg, {page_primary}, {page_secondary}) !important;
 }}
 
-.predict-card {{
-    border-left-color: {page_primary};
+.research-card::before {{
+    background: linear-gradient(90deg, {page_primary}, {page_secondary}) !important;
 }}
 
-.research-card::before {{
+.predict-card::before {{
     background: linear-gradient(90deg, {page_primary}, {page_secondary}) !important;
 }}
 
@@ -2150,6 +2163,8 @@ st.markdown(
 }}
 
 .selected-team-strip {{
+    position: relative;
+    overflow: hidden;
     display: flex;
     align-items: center;
     gap: 0.95rem;
@@ -2158,8 +2173,19 @@ st.markdown(
     border-radius: 16px;
     background: rgba(255,255,255,0.92);
     border: 1px solid rgba(15, 23, 42, 0.10);
-    border-left: 5px solid {page_primary};
     box-shadow: 0 12px 28px rgba(15, 23, 42, 0.065);
+}}
+
+.selected-team-strip::before {{
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 14px;
+    right: 14px;
+    height: 4px;
+    border-radius: 0 0 999px 999px;
+    background: linear-gradient(90deg, {page_primary}, {page_secondary});
+    pointer-events: none;
 }}
 
 .selected-team-strip img,

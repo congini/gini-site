@@ -477,14 +477,8 @@ body .site-top-nav.site-nav-visible {{
 }}
 
 .site-nav-link.active::after {{
-    content: "";
-    position: absolute;
-    left: 0.9rem;
-    right: 0.9rem;
-    bottom: 0.22rem;
-    height: 2px;
-    border-radius: 999px;
-    background: linear-gradient(90deg, {safe_primary}, {safe_secondary});
+    content: none;
+    display: none;
 }}
 
 @media (max-width: 760px) {{

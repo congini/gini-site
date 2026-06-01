@@ -377,16 +377,28 @@ st.markdown(
 }}
 
 .term-reading {{
+    position: relative;
+    overflow: hidden;
     margin-top: 0.85rem;
     margin-left: 1.05rem;
     padding: 0.78rem 0.9rem;
     border-radius: 10px;
     background: #F8FAFC;
     border: 1px solid rgba(0, 34, 68, 0.10);
-    border-left: 4px solid {SECONDARY};
     color: #334155;
     font-size: 0.9rem;
     line-height: 1.55;
+}}
+
+.term-reading::before {{
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 10px;
+    right: 10px;
+    height: 3px;
+    border-radius: 0 0 999px 999px;
+    background: linear-gradient(90deg, {PRIMARY}, {SECONDARY});
 }}
 
 .stTabs [data-baseweb="tab-list"] {{

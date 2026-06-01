@@ -238,8 +238,10 @@ st.markdown(
         .hero-statement {{
             max-width: 760px;
             margin-top: 0.25rem;
-            padding-left: 1rem;
-            border-left: 4px solid {primary};
+            padding: 0.9rem 1rem;
+            border: 1px solid rgba(255,255,255,0.16);
+            border-radius: 14px;
+            background: rgba(255,255,255,0.06);
             color: rgba(255,255,255,0.88);
             font-size: 1rem;
             line-height: 1.6;
@@ -324,9 +326,11 @@ st.markdown(
             content: "";
             position: absolute;
             top: 0;
-            left: 0;
-            width: 100%;
+            left: 14px;
+            right: 14px;
+            width: auto;
             height: 4px;
+            border-radius: 0 0 999px 999px;
             background: linear-gradient(90deg, {primary}, rgba(251,79,20,0.18));
         }}
 
@@ -358,15 +362,27 @@ st.markdown(
         }}
 
         .question-box {{
+            position: relative;
+            overflow: hidden;
             background: #f8fafc;
             border: 1px solid rgba(0, 34, 68, 0.08);
-            border-left: 5px solid {primary};
             border-radius: 14px;
             padding: 1.05rem 1.2rem;
             font-size: 0.96rem;
             color: #111827;
             box-shadow: 0 5px 14px rgba(15, 23, 42, 0.035);
             transition: transform 0.22s ease, box-shadow 0.22s ease, background 0.22s ease;
+        }}
+
+        .question-box::before {{
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 12px;
+            right: 12px;
+            height: 4px;
+            border-radius: 0 0 999px 999px;
+            background: linear-gradient(90deg, {primary}, {secondary});
         }}
 
         .question-box:hover {{
@@ -389,11 +405,13 @@ st.markdown(
         .estat-feature::before {{
             content: "";
             position: absolute;
-            left: 0;
             top: 0;
-            width: 6px;
-            height: 100%;
-            background: {primary};
+            left: 14px;
+            right: 14px;
+            width: auto;
+            height: 4px;
+            border-radius: 0 0 999px 999px;
+            background: linear-gradient(90deg, {primary}, {secondary});
         }}
 
         .estat-feature h3 {{
@@ -463,9 +481,11 @@ st.markdown(
             content: "";
             position: absolute;
             top: 0;
-            left: 0;
+            left: 14px;
+            right: 14px;
             height: 5px;
-            width: 100%;
+            width: auto;
+            border-radius: 0 0 999px 999px;
             background: linear-gradient(90deg, {primary}, {secondary});
         }}
 
@@ -518,12 +538,24 @@ st.markdown(
         }}
 
         .quick-fact-card {{
+            position: relative;
+            overflow: hidden;
             background: #ffffff;
             border: 1px solid rgba(0, 34, 68, 0.14);
-            border-left: 5px solid {primary};
             border-radius: 16px;
             padding: 1rem 1.1rem;
             box-shadow: 0 12px 26px rgba(15, 23, 42, 0.08);
+        }}
+
+        .quick-fact-card::before {{
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 12px;
+            right: 12px;
+            height: 4px;
+            border-radius: 0 0 999px 999px;
+            background: linear-gradient(90deg, {primary}, {secondary});
         }}
 
         .quick-fact-label {{
