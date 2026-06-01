@@ -49,7 +49,8 @@ SNAPSHOT_PATH = DATA_DIR / "live_leaderboard_snapshot.csv"
 WEEKLY_HISTORY_PATH = DATA_DIR / "live_leaderboard_weekly_history.csv"
 LIVE_SOURCE_REFRESH_LOG_PATH = DATA_DIR / "live_sources" / "last_live_source_refresh.txt"
 LIVE_SOURCE_REFRESH_STATUS_PATH = DATA_DIR / "live_sources" / "last_live_source_refresh_status.json"
-LIVE_SOURCE_REFRESH_MINUTES = 60
+WEEKLY_SNAPSHOT_CUTOFF_WEEKDAY = 1  # Tuesday, matching datetime.weekday()
+WEEKLY_SNAPSHOT_CUTOFF_TIME = time(12, 0)
 
 # nflverse currently has public season files through 2025 in this setup.
 # The leaderboard can still use 2026 local roster data, but live source pulls
@@ -180,6 +181,27 @@ WEEKLY_SNAPSHOT_CUTOFFS = {}
 
 def now_et():
     return datetime.now(ET)
+
+
+def coerce_et(dt):
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=ET)
+    return dt.astimezone(ET)
+
+
+def parse_et_timestamp(value):
+    if not value:
+        return None
+    try:
+        return coerce_et(datetime.fromisoformat(str(value).strip()))
+    except Exception:
+        return None
+
+
+def current_hour_window_et(moment=None):
+    return coerce_et(moment or now_et()).replace(minute=0, second=0, microsecond=0)
 
 
 def format_et_timestamp(dt, include_seconds=True):
@@ -464,37 +486,72 @@ def update_local_data_from_nflverse(seasons):
 
     return False, "nflreadpy was available, but no public rows were returned. Continuing with local files.", []
 
-def should_refresh_live_sources():
-    """
-    Controls live source refresh timing.
-    This is separate from weekly leaderboard snapshot saving.
-    """
-    now = now_et()
-
-    if not LIVE_SOURCE_REFRESH_LOG_PATH.exists():
-        return True
+def read_live_source_refresh_status():
+    if not LIVE_SOURCE_REFRESH_STATUS_PATH.exists():
+        return {}
 
     try:
-        last_refresh_text = LIVE_SOURCE_REFRESH_LOG_PATH.read_text().strip()
-        last_refresh = datetime.fromisoformat(last_refresh_text)
-
-        if last_refresh.tzinfo is None:
-            last_refresh = last_refresh.replace(tzinfo=ET)
-
-        return now - last_refresh >= timedelta(minutes=LIVE_SOURCE_REFRESH_MINUTES)
-
+        status = json.loads(LIVE_SOURCE_REFRESH_STATUS_PATH.read_text())
+        return status if isinstance(status, dict) else {}
     except Exception:
-        return True
+        return {}
+
+
+def read_last_successful_live_source_refresh():
+    status = read_live_source_refresh_status()
+
+    last_success = parse_et_timestamp(status.get("last_successful_refresh_time"))
+    if last_success is not None:
+        return last_success
+
+    if status:
+        if bool(status.get("ok", False)):
+            return parse_et_timestamp(status.get("refresh_time"))
+        return None
+
+    if not LIVE_SOURCE_REFRESH_LOG_PATH.exists():
+        return None
+
+    try:
+        return parse_et_timestamp(LIVE_SOURCE_REFRESH_LOG_PATH.read_text().strip())
+    except Exception:
+        return None
+
+
+def read_last_live_source_refresh_attempt():
+    status = read_live_source_refresh_status()
+    return parse_et_timestamp(status.get("refresh_time"))
+
+
+def should_refresh_live_sources():
+    """
+    Controls live source refresh timing by ET hour window.
+    This is separate from weekly leaderboard snapshot saving.
+    """
+    current_window = current_hour_window_et()
+    last_success = read_last_successful_live_source_refresh()
+
+    if last_success is not None and current_hour_window_et(last_success) >= current_window:
+        return False
+
+    last_attempt = read_last_live_source_refresh_attempt()
+    if last_attempt is not None and current_hour_window_et(last_attempt) >= current_window:
+        return False
+
+    return True
 
 
 def mark_live_sources_refreshed(ok=False, message=""):
     LIVE_SOURCE_REFRESH_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    refresh_time = now_et().isoformat()
+    refresh_time = now_et()
+    last_success = refresh_time if ok else read_last_successful_live_source_refresh()
 
-    LIVE_SOURCE_REFRESH_LOG_PATH.write_text(refresh_time)
+    if ok:
+        LIVE_SOURCE_REFRESH_LOG_PATH.write_text(refresh_time.isoformat())
 
     status = {
-        "refresh_time": refresh_time,
+        "refresh_time": refresh_time.isoformat(),
+        "last_successful_refresh_time": last_success.isoformat() if last_success else "",
         "ok": bool(ok),
         "message": str(message),
     }
@@ -506,13 +563,17 @@ def read_last_live_source_refresh_status():
         return False, "No previous live source refresh status found."
 
     try:
-        status = json.loads(LIVE_SOURCE_REFRESH_STATUS_PATH.read_text())
+        status = read_live_source_refresh_status()
         ok = bool(status.get("ok", False))
         message = status.get("message", "No refresh message found.")
         refresh_time = status.get("refresh_time", "")
+        last_success = status.get("last_successful_refresh_time", "")
 
         if refresh_time:
-            return ok, f"{message} Last attempt: {refresh_time}"
+            detail = f"{message} Last attempt: {refresh_time}"
+            if last_success:
+                detail += f" Last successful refresh: {last_success}"
+            return ok, detail
 
         return ok, message
 
@@ -522,7 +583,7 @@ def read_last_live_source_refresh_status():
 
 def refresh_live_sources_if_needed(selected_season):
     """
-    Attempts to refresh nflverse-backed live source CSVs every 5 minutes.
+    Attempts to refresh nflverse-backed live source CSVs once per ET hour window.
     If the app skips because it refreshed recently, it still shows the last known status.
     """
     if not should_refresh_live_sources():
@@ -1586,17 +1647,21 @@ def first_matching_column(df, candidates):
 
 
 def snapshot_cutoff_at(day):
-    return datetime.combine(day, time(23, 59)).replace(tzinfo=ET)
+    return datetime.combine(day, WEEKLY_SNAPSHOT_CUTOFF_TIME).replace(tzinfo=ET)
 
 
 def current_calendar_week_cutoff(moment):
+    moment = coerce_et(moment)
     monday = moment.date() - timedelta(days=moment.weekday())
-    return snapshot_cutoff_at(monday)
+    cutoff_day = monday + timedelta(days=WEEKLY_SNAPSHOT_CUTOFF_WEEKDAY)
+    return snapshot_cutoff_at(cutoff_day)
 
 
-def next_monday_cutoff(start_date):
-    days_until_monday = (0 - start_date.weekday()) % 7
-    return snapshot_cutoff_at(start_date + timedelta(days=days_until_monday))
+def next_weekly_snapshot_cutoff(start_date):
+    days_until_cutoff = (WEEKLY_SNAPSHOT_CUTOFF_WEEKDAY - start_date.weekday()) % 7
+    if days_until_cutoff == 0:
+        days_until_cutoff = 7
+    return snapshot_cutoff_at(start_date + timedelta(days=days_until_cutoff))
 
 
 def schedule_date_values(values):
@@ -1702,7 +1767,7 @@ def current_nfl_period_key(selected_season, schedule_df):
             week_start_date = preseason_started.loc[current_week_index]
 
             key = f"{season}-Preseason-Week-{current_week:02d}"
-            WEEKLY_SNAPSHOT_CUTOFFS[key] = next_monday_cutoff(week_start_date)
+            WEEKLY_SNAPSHOT_CUTOFFS[key] = next_weekly_snapshot_cutoff(week_start_date)
 
             return key, season, f"Preseason Week {current_week}"
 
@@ -1724,7 +1789,7 @@ def current_nfl_period_key(selected_season, schedule_df):
             week_start_date = regular_started.loc[current_week_index]
 
             key = f"{season}-Week-{current_week:02d}"
-            WEEKLY_SNAPSHOT_CUTOFFS[key] = next_monday_cutoff(week_start_date)
+            WEEKLY_SNAPSHOT_CUTOFFS[key] = next_weekly_snapshot_cutoff(week_start_date)
 
             return key, season, f"Week {current_week}"
 
@@ -1753,7 +1818,7 @@ def current_nfl_period_key(selected_season, schedule_df):
             playoff_label = playoff_labels.get(current_week, f"Playoff Week {current_week}")
 
             key = f"{season}-{playoff_label.replace(' ', '-')}"
-            WEEKLY_SNAPSHOT_CUTOFFS[key] = next_monday_cutoff(week_start_date)
+            WEEKLY_SNAPSHOT_CUTOFFS[key] = next_weekly_snapshot_cutoff(week_start_date)
 
             return key, season, playoff_label
 
