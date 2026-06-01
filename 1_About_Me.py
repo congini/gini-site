@@ -173,9 +173,11 @@ st.markdown(
             content: "";
             position: absolute;
             top: 0;
-            left: 0;
+            left: clamp(14px, 2vw, 22px);
+            right: clamp(14px, 2vw, 22px);
             height: 6px;
-            width: 100%;
+            width: auto;
+            border-radius: 0 0 999px 999px;
             background: linear-gradient(90deg, {primary}, rgba(255,255,255,0.35), {secondary});
         }}
 
@@ -260,9 +262,11 @@ st.markdown(
             content: "";
             position: absolute;
             top: 0;
-            left: 0;
+            left: 14px;
+            right: 14px;
             height: 5px;
-            width: 100%;
+            width: auto;
+            border-radius: 0 0 999px 999px;
             background: linear-gradient(90deg, {primary}, {secondary});
             z-index: 3;
         }}

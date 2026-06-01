@@ -1629,9 +1629,11 @@ st.markdown(
     content: "";
     position: absolute;
     top: 0;
-    left: 0;
-    width: 100%;
+    left: clamp(14px, 2vw, 22px);
+    right: clamp(14px, 2vw, 22px);
+    width: auto;
     height: 5px;
+    border-radius: 0 0 999px 999px;
     background: linear-gradient(90deg, {PRIMARY}, {SECONDARY});
 }}
 
@@ -1661,6 +1663,7 @@ st.markdown(
 }}
 
 .research-card {{
+    position: relative;
     justify-self: end;
     width: min(100%, 520px);
     min-height: 188px;
@@ -1668,9 +1671,21 @@ st.markdown(
     border-radius: 18px;
     background: rgba(255,255,255,0.13);
     border: 1px solid rgba(255,255,255,0.24);
-    border-left: 5px solid {PRIMARY};
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.16), 0 14px 30px rgba(0,0,0,0.12);
     backdrop-filter: blur(10px);
+    overflow: hidden;
+}}
+
+.research-card::before {{
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 14px;
+    right: 14px;
+    height: 4px;
+    border-radius: 0 0 999px 999px;
+    background: linear-gradient(90deg, {PRIMARY}, {SECONDARY});
+    pointer-events: none;
 }}
 
 .research-label {{
@@ -2107,9 +2122,12 @@ st.markdown(
     background: linear-gradient(90deg, {page_primary}, {page_secondary}) !important;
 }}
 
-.research-card,
 .predict-card {{
     border-left-color: {page_primary};
+}}
+
+.research-card::before {{
+    background: linear-gradient(90deg, {page_primary}, {page_secondary}) !important;
 }}
 
 .section-title::after {{

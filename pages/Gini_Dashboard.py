@@ -1208,9 +1208,11 @@ h1, h2, h3, h4, h5, h6, p, label {{
     content: "";
     position: absolute;
     top: 0;
-    left: 0;
-    width: 100%;
+    left: clamp(14px, 2vw, 22px);
+    right: clamp(14px, 2vw, 22px);
+    width: auto;
     height: 5px;
+    border-radius: 0 0 999px 999px;
     background: linear-gradient(90deg, {selected_team_color}, {selected_team_color2});
 }}
 
@@ -1263,11 +1265,13 @@ h1, h2, h3, h4, h5, h6, p, label {{
 .hero-team-card::before {{
     content: "";
     position: absolute;
-    left: 0;
     top: 0;
-    width: 5px;
-    height: 100%;
-    background: linear-gradient(180deg, {selected_team_color}, {selected_team_color2});
+    left: 14px;
+    right: 14px;
+    width: auto;
+    height: 4px;
+    border-radius: 0 0 999px 999px;
+    background: linear-gradient(90deg, {selected_team_color}, {selected_team_color2});
     opacity: 0.95;
 }}
 

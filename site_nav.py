@@ -177,6 +177,7 @@ div[data-testid="stPlotlyChart"] {{
 ) {{
     position: relative;
     isolation: isolate;
+    overflow: hidden;
     border-color: rgba(255,255,255,0.20) !important;
     box-shadow: 0 22px 52px rgba(15,23,42,0.14) !important;
     animation: giniFadeUp 0.52s ease-out both;
@@ -193,7 +194,8 @@ div[data-testid="stPlotlyChart"] {{
 )::after {{
     content: "";
     position: absolute;
-    inset: 0;
+    inset: 1px;
+    border-radius: inherit;
     pointer-events: none;
     z-index: 0;
     background:

@@ -252,9 +252,11 @@ st.markdown(
     content: "";
     position: absolute;
     top: 0;
-    left: 0;
+    left: clamp(14px, 2vw, 22px);
+    right: clamp(14px, 2vw, 22px);
     height: 6px;
-    width: 100%;
+    width: auto;
+    border-radius: 0 0 999px 999px;
     background: linear-gradient(90deg, {PRIMARY}, rgba(255,255,255,0.35), {SECONDARY});
 }}
 
