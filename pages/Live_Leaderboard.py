@@ -1884,6 +1884,9 @@ def generate_movement_reason(row, has_snapshot):
 
 def render_live_status_strip(selected_season, weekly_snapshot_period, static_time, leaderboard):
     fallback = format_et_timestamp(static_time, include_seconds=True)
+    fallback_dt = static_time.replace(tzinfo=ET) if static_time.tzinfo is None else static_time.astimezone(ET)
+    next_refresh_fallback_dt = fallback_dt.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    next_refresh_fallback = next_refresh_fallback_dt.strftime("%I:%M %p").lstrip("0") + " ET"
 
     best = leaderboard.sort_values("live_rank", ascending=True).iloc[0]
     worst = leaderboard.sort_values("live_rank", ascending=False).iloc[0]
@@ -2040,6 +2043,9 @@ html, body {{
     display:flex;
     flex-direction:column;
     justify-content:center;
+    box-sizing:border-box;
+    max-width:100%;
+    min-width:0;
     min-height:94px;
     padding:.78rem .88rem;
     border-radius:14px;
@@ -2072,9 +2078,24 @@ html, body {{
     letter-spacing:-.01em;
 }}
 
-.live-clock-value {{
+.live-time-row {{
+    display:flex;
+    align-items:center;
+    flex-wrap:wrap;
+    gap:.5rem;
+    box-sizing:border-box;
+    width:100%;
+    max-width:100%;
+    min-width:0;
+}}
+
+.live-clock-pill,
+.next-refresh-pill {{
     display:inline-flex;
     align-items:center;
+    box-sizing:border-box;
+    max-width:100%;
+    min-width:0;
     min-height:32px;
     padding:0 .86rem;
     border-radius:999px;
@@ -2082,9 +2103,15 @@ html, body {{
     background:rgba(255,255,255,.14);
     border:1px solid rgba(255,255,255,.24);
     box-shadow:0 10px 22px rgba(0,0,0,.16);
-    white-space:nowrap;
-    font-size:.88rem;
+    white-space:normal;
+    overflow-wrap:anywhere;
+    font-size:clamp(.78rem, 1.4vw, .88rem);
     font-weight:850;
+}}
+
+.next-refresh-pill {{
+    background:linear-gradient(135deg, rgba(241,90,36,.24), rgba(0,115,183,.18));
+    border-color:rgba(255,255,255,.28);
 }}
 
 /* ── Broadcast-style headline cards ── */
@@ -2321,8 +2348,10 @@ html, body {{
         grid-template-columns:1fr 1fr;
     }}
 
-    .live-clock-value {{
-        white-space:normal;
+    .live-clock-pill,
+    .next-refresh-pill {{
+        flex:1 1 100%;
+        justify-content:center;
     }}
 }}
 </style>
@@ -2350,7 +2379,10 @@ html, body {{
 
             <div class="status-card status-live">
                 <div class="status-label">Live As Of</div>
-                <div id="live-clock-text" class="status-value live-clock-value">{escape(fallback)}</div>
+                <div class="live-time-row">
+                    <div id="live-clock-text" class="status-value live-clock-pill">{escape(fallback)}</div>
+                    <div id="next-refresh-text" class="status-value next-refresh-pill">Next Refresh: {escape(next_refresh_fallback)}</div>
+                </div>
             </div>
         </div>
 
@@ -2396,7 +2428,11 @@ html, body {{
 
 <script>
 (function() {{
-  const target = document.getElementById("live-clock-text");
+  const clockTarget = document.getElementById("live-clock-text");
+  const refreshTarget = document.getElementById("next-refresh-text");
+  if (!clockTarget || !refreshTarget) {{
+    return;
+  }}
 
   function updateClock() {{
     try {{
@@ -2417,9 +2453,31 @@ html, body {{
         hour12:true
       }}).format(now);
 
-      target.textContent = dateText + " | " + timeText + " ET";
+      const easternParts = new Intl.DateTimeFormat("en-US", {{
+        timeZone:"America/New_York",
+        year:"numeric",
+        month:"numeric",
+        day:"numeric",
+        hour:"2-digit",
+        minute:"numeric",
+        second:"numeric",
+        hourCycle:"h23"
+      }}).formatToParts(now).reduce(function(parts, part) {{
+        parts[part.type] = part.value;
+        return parts;
+      }}, {{}});
+
+      const easternHour = Number(easternParts.hour);
+      const nextRefreshHour = ((easternHour % 24) + 1) % 24;
+      const nextRefreshHourLabel = nextRefreshHour % 12 || 12;
+      const nextRefreshPeriod = nextRefreshHour < 12 ? "AM" : "PM";
+      const refreshText = nextRefreshHourLabel + ":00 " + nextRefreshPeriod;
+
+      clockTarget.textContent = dateText + " | " + timeText + " ET";
+      refreshTarget.textContent = "Next Refresh: " + refreshText + " ET";
     }} catch (err) {{
-      target.textContent = "{escape(fallback)}";
+      clockTarget.textContent = "{escape(fallback)}";
+      refreshTarget.textContent = "Next Refresh: {escape(next_refresh_fallback)}";
     }}
   }}
 
