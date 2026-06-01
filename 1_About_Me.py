@@ -372,24 +372,30 @@ st.markdown(
         }}
 
         .estat-feature {{
-            background: linear-gradient(135deg, rgba(251, 79, 20, 0.08), rgba(255,255,255,0.96));
-            border: 1px solid rgba(251, 79, 20, 0.34);
+            background: #ffffff;
+            border: 1px solid rgba(0, 34, 68, 0.16);
             border-radius: 18px;
-            padding: 1.5rem 1.6rem;
+            padding: 1.55rem 1.65rem;
             margin: 1.5rem 0 2.4rem 0;
-            box-shadow: 0 10px 28px rgba(251, 79, 20, 0.07);
+            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.075);
             position: relative;
             overflow: hidden;
+            transition: transform 0.22s ease, box-shadow 0.22s ease;
         }}
 
         .estat-feature::before {{
             content: "";
             position: absolute;
-            left: 0;
             top: 0;
-            width: 6px;
-            height: 100%;
-            background: {primary};
+            left: 0;
+            width: 100%;
+            height: 5px;
+            background: linear-gradient(90deg, {primary}, {secondary});
+        }}
+
+        .estat-feature:hover {{
+            transform: translateY(-4px);
+            box-shadow: 0 18px 38px rgba(15, 23, 42, 0.12);
         }}
 
         .estat-feature h3 {{

@@ -2199,17 +2199,17 @@ html, body {{
         inset 0 1px 0 rgba(255,255,255,.16),
         0 12px 24px rgba(0,0,0,.12);
     backdrop-filter:blur(16px);
-    overflow:visible;
+    overflow:hidden;
 }}
 
 .headline-card::before {{
     content:"";
     position:absolute;
     top:0;
-    left:14px;
-    right:14px;
-    height:3px;
-    border-radius:0 0 999px 999px;
+    left:0;
+    right:0;
+    height:4px;
+    border-radius:15px 15px 0 0;
     background:linear-gradient(90deg, var(--card-accent), var(--card-accent2));
     opacity:.95;
 }}

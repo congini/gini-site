@@ -1,4 +1,3 @@
-import html
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -13,15 +12,301 @@ NAV_ITEMS = [
     ("Terminology", "/terminology"),
 ]
 
+DEFAULT_PRIMARY = "#F15A24"
+DEFAULT_SECONDARY = "#0073B7"
 
-def render_top_nav(active_page, primary="#F15A24", secondary="#0073B7"):
-    safe_primary = html.escape(str(primary))
-    safe_secondary = html.escape(str(secondary))
+
+def _safe_hex_color(value, fallback):
+    text = str(value or "").strip()
+    if text.startswith("#") and len(text) == 4:
+        text = "#" + "".join(char * 2 for char in text[1:])
+
+    if (
+        text.startswith("#")
+        and len(text) == 7
+        and all(char in "0123456789abcdefABCDEF" for char in text[1:])
+    ):
+        return text
+
+    return fallback
+
+
+def render_global_background(primary_color=DEFAULT_PRIMARY, secondary_color=DEFAULT_SECONDARY):
+    safe_primary = _safe_hex_color(primary_color, DEFAULT_PRIMARY)
+    safe_secondary = _safe_hex_color(secondary_color, DEFAULT_SECONDARY)
+
+    st.markdown(
+        f"""
+<style>
+:root {{
+    --estat-ambient-primary: {safe_primary};
+    --estat-ambient-secondary: {safe_secondary};
+}}
+
+html,
+body {{
+    background: #F8FAFC !important;
+}}
+
+.stApp,
+[data-testid="stAppViewContainer"] {{
+    color-scheme: light;
+    background:
+        linear-gradient(118deg, transparent 0 41%, {safe_secondary}0B 41.15%, transparent 42.3%, transparent 58%, {safe_primary}0B 58.15%, transparent 59.4%),
+        radial-gradient(circle at 13% 9%, {safe_primary}18 0%, transparent 28%),
+        radial-gradient(circle at 88% 13%, {safe_secondary}18 0%, transparent 30%),
+        radial-gradient(circle at 52% 98%, rgba(0, 115, 183, 0.08) 0%, transparent 34%),
+        linear-gradient(180deg, #FFFFFF 0%, #F7FAFC 48%, #EEF5FA 100%) !important;
+    background-size:
+        145% 145%,
+        132% 132%,
+        138% 138%,
+        130% 130%,
+        100% 100%;
+    background-position:
+        0 0,
+        0 0,
+        0 0,
+        0 0,
+        0 0;
+    animation: estatAmbientTextureDrift 30s ease-in-out infinite alternate !important;
+    will-change: background-position;
+    overflow-x: hidden;
+}}
+
+[data-testid="stAppViewContainer"] {{
+    position: relative;
+    isolation: isolate;
+}}
+
+[data-testid="stAppViewContainer"]::before,
+[data-testid="stAppViewContainer"]::after {{
+    content: "";
+    position: fixed;
+    pointer-events: none;
+    z-index: 0;
+    filter: blur(34px);
+    transform: translate3d(0, 0, 0);
+    will-change: transform, opacity;
+}}
+
+[data-testid="stAppViewContainer"]::before {{
+    top: -34vmax;
+    left: -24vmax;
+    width: 76vmax;
+    height: 76vmax;
+    border-radius: 999px;
+    background:
+        radial-gradient(ellipse at center, {safe_primary}36 0%, {safe_primary}16 34%, transparent 66%);
+    opacity: 0.58;
+    animation: estatAmbientPrimary 24s ease-in-out infinite alternate !important;
+    animation-play-state: running !important;
+}}
+
+[data-testid="stAppViewContainer"]::after {{
+    right: -26vmax;
+    bottom: -34vmax;
+    width: 82vmax;
+    height: 82vmax;
+    border-radius: 999px;
+    background:
+        radial-gradient(ellipse at center, {safe_secondary}34 0%, {safe_secondary}14 34%, transparent 68%);
+    opacity: 0.52;
+    animation: estatAmbientSecondary 28s ease-in-out infinite alternate !important;
+    animation-play-state: running !important;
+}}
+
+.estat-ambient-motion {{
+    position: fixed;
+    inset: -14vh -12vw;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+    contain: paint;
+}}
+
+.estat-ambient-dots {{
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    opacity: 0.42;
+    background-image:
+        radial-gradient(circle, rgba(15, 23, 42, 0.17) 1px, transparent 1.35px),
+        radial-gradient(circle, rgba(15, 23, 42, 0.12) 0.85px, transparent 1.2px);
+    background-size: 28px 28px, 44px 44px;
+    background-position: 0 0, 14px 18px;
+    animation: estatAmbientDotDrift 34s ease-in-out infinite alternate !important;
+    transform: translate3d(0, 0, 0);
+    will-change: background-position, transform;
+}}
+
+.estat-ambient-glow {{
+    position: absolute;
+    display: block;
+    z-index: 1;
+    border-radius: 999px;
+    filter: blur(36px);
+    transform: translate3d(0, 0, 0);
+    will-change: transform, opacity;
+}}
+
+.estat-ambient-glow-primary {{
+    top: -12vmax;
+    left: -10vmax;
+    width: 54vmax;
+    height: 54vmax;
+    background:
+        radial-gradient(ellipse at center, {safe_primary}30 0%, {safe_primary}14 36%, transparent 68%);
+    opacity: 0.62;
+    animation: estatAmbientPrimary 24s ease-in-out infinite alternate !important;
+}}
+
+.estat-ambient-glow-secondary {{
+    right: -12vmax;
+    bottom: -14vmax;
+    width: 58vmax;
+    height: 58vmax;
+    background:
+        radial-gradient(ellipse at center, {safe_secondary}30 0%, {safe_secondary}14 36%, transparent 70%);
+    opacity: 0.58;
+    animation: estatAmbientSecondary 28s ease-in-out infinite alternate !important;
+}}
+
+.bg-canvas,
+.team-bg-canvas,
+.predict-bg {{
+    display: none !important;
+}}
+
+[data-testid="stAppViewContainer"] > .main,
+[data-testid="stMain"],
+section.main,
+.block-container {{
+    position: relative;
+    z-index: 1;
+}}
+
+[data-testid="stHeader"] {{
+    background: transparent !important;
+}}
+
+@keyframes estatAmbientPrimary {{
+    0% {{
+        opacity: 0.48;
+        transform: translate3d(-3vw, -2vh, 0) scale(1);
+    }}
+    50% {{
+        opacity: 0.74;
+        transform: translate3d(18vw, 10vh, 0) scale(1.08);
+    }}
+    100% {{
+        opacity: 0.56;
+        transform: translate3d(8vw, 28vh, 0) scale(1.03);
+    }}
+}}
+
+@keyframes estatAmbientSecondary {{
+    0% {{
+        opacity: 0.52;
+        transform: translate3d(3vw, 2vh, 0) scale(1);
+    }}
+    50% {{
+        opacity: 0.72;
+        transform: translate3d(-20vw, -9vh, 0) scale(1.07);
+    }}
+    100% {{
+        opacity: 0.52;
+        transform: translate3d(-8vw, -28vh, 0) scale(1.04);
+    }}
+}}
+
+@keyframes estatAmbientTextureDrift {{
+    0% {{
+        background-position:
+            0 0,
+            0 0,
+            0 0,
+            0 0,
+            0 0;
+    }}
+    100% {{
+        background-position:
+            148px -104px,
+            -112px 86px,
+            126px 96px,
+            0 -124px,
+            0 0;
+    }}
+}}
+
+@keyframes estatAmbientDotDrift {{
+    0% {{
+        transform: translate3d(-1.5vw, -0.8vh, 0);
+        background-position: 0 0, 14px 18px;
+    }}
+    50% {{
+        transform: translate3d(2vw, 1.3vh, 0);
+        background-position: 64px 44px, -28px 64px;
+    }}
+    100% {{
+        transform: translate3d(-1vw, 1.8vh, 0);
+        background-position: 128px 88px, -72px 110px;
+    }}
+}}
+
+@media (max-width: 760px) {{
+    .stApp,
+    [data-testid="stAppViewContainer"] {{
+        background-size:
+            165% 165%,
+            150% 150%,
+            155% 155%,
+            145% 145%,
+            100% 100% !important;
+    }}
+
+    [data-testid="stAppViewContainer"]::before,
+    [data-testid="stAppViewContainer"]::after,
+    .estat-ambient-dots,
+    .estat-ambient-glow {{
+        filter: blur(28px);
+        opacity: 0.42;
+    }}
+}}
+
+@media (prefers-reduced-motion: reduce) {{
+    .stApp,
+    [data-testid="stAppViewContainer"],
+    [data-testid="stAppViewContainer"]::before,
+    [data-testid="stAppViewContainer"]::after,
+    .estat-ambient-dots,
+    .estat-ambient-glow {{
+        animation: none !important;
+        transform: none !important;
+    }}
+}}
+</style>
+<div class="estat-ambient-motion" aria-hidden="true">
+    <span class="estat-ambient-dots"></span>
+    <span class="estat-ambient-glow estat-ambient-glow-primary"></span>
+    <span class="estat-ambient-glow estat-ambient-glow-secondary"></span>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def render_top_nav(active_page, primary=DEFAULT_PRIMARY, secondary=DEFAULT_SECONDARY):
+    safe_primary = _safe_hex_color(primary, DEFAULT_PRIMARY)
+    safe_secondary = _safe_hex_color(secondary, DEFAULT_SECONDARY)
 
     links_html = "\n".join(
         f'<a class="site-nav-link{" active" if label == active_page else ""}" href="{href}" target="_self">{label}</a>'
         for label, href in NAV_ITEMS
     )
+
+    render_global_background(safe_primary, safe_secondary)
 
     st.markdown(
         f"""
@@ -97,11 +382,17 @@ body .site-top-nav {{
     min-height: 48px;
     padding: 0.42rem 0.7rem;
     box-sizing: border-box;
-    border: 1px solid rgba(15, 23, 42, 0.10);
-    border-radius: 16px;
-    background: rgba(255,255,255,0.82);
-    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.075);
-    backdrop-filter: blur(14px);
+    overflow: hidden !important;
+    border: 1px solid rgba(255, 255, 255, 0.58) !important;
+    border-radius: 16px !important;
+    background:
+        linear-gradient(135deg, rgba(255,255,255,0.58), rgba(255,255,255,0.36)) !important;
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.72),
+        inset 0 -1px 0 rgba(15,23,42,0.04),
+        0 12px 32px rgba(15, 23, 42, 0.085) !important;
+    backdrop-filter: blur(22px) saturate(1.28) !important;
+    -webkit-backdrop-filter: blur(22px) saturate(1.28) !important;
     transform: translateY(0);
     opacity: 1;
     transition:
@@ -109,6 +400,18 @@ body .site-top-nav {{
         opacity 0.18s ease,
         box-shadow 0.18s ease;
     will-change: transform;
+}}
+
+body .site-top-nav::before {{
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background:
+        linear-gradient(120deg, rgba(255,255,255,0.42), rgba(255,255,255,0.06) 44%, rgba(255,255,255,0.24)),
+        radial-gradient(circle at 10% 0%, rgba(255,255,255,0.46), transparent 38%);
+    opacity: 0.68;
 }}
 
 body .site-top-nav-spacer {{
@@ -128,6 +431,8 @@ body .site-top-nav.site-nav-visible {{
 }}
 
 .site-nav-links {{
+    position: relative;
+    z-index: 1;
     display: flex;
     align-items: center;
     justify-content: space-evenly;
@@ -186,7 +491,7 @@ body .site-top-nav.site-nav-visible {{
         min-height: 58px;
         margin: 0 0 0.75rem 0 !important;
         padding: 0.42rem 0.5rem;
-        border-radius: 14px;
+        border-radius: 14px !important;
     }}
 
     body .site-top-nav-spacer {{

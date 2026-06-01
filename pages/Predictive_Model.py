@@ -1603,7 +1603,7 @@ st.markdown(
     position: relative;
     z-index: 2;
     max-width: 1500px;
-    margin: -0.85rem auto 0 auto;
+    margin: -1.55rem auto 0 auto;
     padding: 0 1.1rem 2.5rem 1.1rem;
 }}
 
@@ -1861,7 +1861,7 @@ st.markdown(
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(280px, 0.45fr);
     gap: 1rem;
-    margin-top: 0.75rem;
+    margin: 0.75rem 0 1.25rem 0;
 }}
 
 .profile-panel {{
@@ -2305,16 +2305,7 @@ The forecast reads the Gini profile, expected-wins profile, scoring efficiency, 
 )
 
 st.markdown('<div class="predict-controls-title">Predictor Controls</div>', unsafe_allow_html=True)
-control_season_col, control_team_col = st.columns([1, 2])
-season_options = sorted(prediction_year_options, reverse=True)
-if st.session_state.get("predictor_selected_season_control") not in season_options:
-    st.session_state.pop("predictor_selected_season_control", None)
-selected_season_choice = control_season_col.selectbox(
-    "Season / Year",
-    season_options,
-    index=season_options.index(selected_season),
-    key="predictor_selected_season_control",
-)
+control_team_col, control_season_col = st.columns([2.35, 0.9], gap="large")
 
 team_label_lookup = {
     team: team_display_name(team, team_name_lookup, include_abbr=False)
@@ -2330,6 +2321,16 @@ selected_team_choice = control_team_col.selectbox(
     team_options,
     index=team_options.index(selected_team_label) if selected_team_label in team_options else 0,
     key="predictor_selected_team_control",
+)
+
+season_options = sorted(prediction_year_options, reverse=True)
+if st.session_state.get("predictor_selected_season_control") not in season_options:
+    st.session_state.pop("predictor_selected_season_control", None)
+selected_season_choice = control_season_col.selectbox(
+    "Season",
+    season_options,
+    index=season_options.index(selected_season),
+    key="predictor_selected_season_control",
 )
 
 new_selected_team = team_abbr_lookup.get(selected_team_choice, selected_team_choice)
