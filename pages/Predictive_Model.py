@@ -1,5 +1,7 @@
 from pathlib import Path
 import base64
+import json
+import re
 import sys
 
 import pandas as pd
@@ -31,11 +33,15 @@ st.set_page_config(
 
 APP_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = APP_DIR / "data"
+LIVE_SOURCES_DIR = DATA_DIR / "live_sources"
+PREDICTIVE_MODEL_DEBUG_LOG_PATH = LIVE_SOURCES_DIR / "predictive_model_projection_debug.json"
 
 if str(APP_DIR) not in sys.path:
     sys.path.append(str(APP_DIR))
 
 from site_nav import render_top_nav
+from live_source_refresh import record_model_recalculation, refresh_live_sources_if_needed
+import live_roster_scoring as roster_scoring
 
 
 PRIMARY = "#F15A24"
@@ -46,6 +52,21 @@ MUTED = "#64748B"
 GRID = "#E5E7EB"
 BRONCOS_LOGO_PATH = APP_DIR / "assets" / "broncos_logo_centered.png"
 BRONCOS_LOGO_SOURCE = str(BRONCOS_LOGO_PATH)
+HOME_FIELD_SCHEDULE_ADJUSTMENT = 1.0
+AWAY_FIELD_SCHEDULE_ADJUSTMENT = 1.5
+NEUTRAL_FIELD_SCHEDULE_ADJUSTMENT = 0.5
+
+TEAM_ALIASES = {
+    "ARZ": "ARI",
+    "BLT": "BAL",
+    "CLV": "CLE",
+    "JAC": "JAX",
+    "LAR": "LA",
+    "STL": "LA",
+    "SD": "LAC",
+    "OAK": "LV",
+    "WSH": "WAS",
+}
 
 TEAM_THEME_OVERRIDES = {
     "DEN": {"primary": PRIMARY, "secondary": SECONDARY},
@@ -75,6 +96,27 @@ DISPLAY_LABELS = {
     "penalty_yards_margin_per_game": "Penalty Yard Margin per Game",
     "schedule_strength": "Schedule Strength",
     "sos_rank": "Schedule Strength Rank",
+    "projection_schedule_strength": "Projection Schedule Strength",
+    "projection_schedule_adjusted_strength": "Projection Schedule Strength",
+    "projection_sos_rank": "Projection Schedule Rank",
+    "projection_schedule_games": "Projection Schedule Games",
+    "projection_home_games": "Projection Home Games",
+    "projection_away_games": "Projection Away Games",
+    "projection_neutral_games": "Projection Neutral Games",
+    "projection_division_games": "Projection Division Games",
+    "projection_conference_games": "Projection Conference Games",
+    "projection_nonconference_games": "Projection Non-Conference Games",
+    "projection_avg_rest_advantage": "Projection Rest Advantage",
+    "projection_roster_score": "Live Leaderboard Roster Score",
+    "projection_qb_score": "Roster QB Score",
+    "projection_offense_skill_score": "Roster Skill Score",
+    "projection_offensive_line_score": "Roster Offensive Line Score",
+    "projection_defensive_front_score": "Roster Defensive Front Score",
+    "projection_secondary_score": "Roster Secondary Score",
+    "projection_premium_position_score": "Roster Premium Position Score",
+    "projection_availability_score": "Roster Availability Score",
+    "projection_rookie_projection_score": "Roster Rookie Score",
+    "projection_continuity_score": "Roster Continuity Score",
     "offense_rank": "Offense Rank",
     "defense_rank": "Defense Rank",
     "balance_gap": "Offense/Defense Balance Gap",
@@ -119,6 +161,13 @@ INTEGER_DISPLAY_COLUMNS = {
     "Defense Rank",
     "Schedule Strength Rank",
     "Team-Seasons",
+    "Projection Schedule Games",
+    "Projection Home Games",
+    "Projection Away Games",
+    "Projection Neutral Games",
+    "Projection Division Games",
+    "Projection Conference Games",
+    "Projection Non-Conference Games",
 }
 
 ONE_DECIMAL_DISPLAY_COLUMNS = {
@@ -127,6 +176,18 @@ ONE_DECIMAL_DISPLAY_COLUMNS = {
     "Defense Gini",
     "Point Differential per Game",
     "Schedule Strength",
+    "Projection Schedule Strength",
+    "Projection Rest Advantage",
+    "Live Leaderboard Roster Score",
+    "Roster QB Score",
+    "Roster Skill Score",
+    "Roster Offensive Line Score",
+    "Roster Defensive Front Score",
+    "Roster Secondary Score",
+    "Roster Premium Position Score",
+    "Roster Availability Score",
+    "Roster Rookie Score",
+    "Roster Continuity Score",
     "Average Following-Season Wins",
 }
 
@@ -142,20 +203,155 @@ THREE_DECIMAL_DISPLAY_COLUMNS = {
 # -----------------------------
 
 
-@st.cache_data(show_spinner=False)
-def load_data():
-    files = {
-        "team_season": DATA_DIR / "team_season_estat.csv",
-        "team_game": DATA_DIR / "team_game_estat.csv",
-        "games": DATA_DIR / "games_2005_onward.csv",
-        "roster": DATA_DIR / "nfl_season_rosters_clean_2005_2025.csv",
-        "team_assets": DATA_DIR / "teams_colors_logos.csv",
-    }
+BASE_DATA_FILES = {
+    "team_season": DATA_DIR / "team_season_estat.csv",
+    "team_game": DATA_DIR / "team_game_estat.csv",
+    "games": DATA_DIR / "games_2005_onward.csv",
+    "roster": DATA_DIR / "nfl_season_rosters_clean_2005_2025.csv",
+    "team_assets": DATA_DIR / "teams_colors_logos.csv",
+}
 
+LIVE_ROSTER_SOURCE_FILES = {
+    "weekly_rosters": LIVE_SOURCES_DIR / "weekly_rosters.csv",
+    "player_weekly_stats": LIVE_SOURCES_DIR / "player_weekly_stats.csv",
+    "player_season_stats": LIVE_SOURCES_DIR / "player_season_stats.csv",
+    "player_snap_counts": LIVE_SOURCES_DIR / "snap_counts.csv",
+    "injuries": LIVE_SOURCES_DIR / "injuries.csv",
+    "transactions": LIVE_SOURCES_DIR / "transactions.csv",
+    "depth_charts": LIVE_SOURCES_DIR / "depth_charts.csv",
+    "draft_picks": LIVE_SOURCES_DIR / "draft_picks.csv",
+    "contracts": LIVE_SOURCES_DIR / "contracts.csv",
+    "players": LIVE_SOURCES_DIR / "players.csv",
+}
+
+LIVE_ROSTER_READ_KEYS = {
+    "weekly_rosters",
+    "player_weekly_stats",
+    "player_season_stats",
+    "player_snap_counts",
+    "injuries",
+    "transactions",
+    "depth_charts",
+}
+
+
+def normalize_team(value):
+    team = "" if pd.isna(value) else str(value).strip().upper()
+    return TEAM_ALIASES.get(team, team)
+
+
+def relative_path_label(path):
+    path = Path(path)
+    try:
+        return str(path.relative_to(APP_DIR)).replace("\\", "/")
+    except Exception:
+        return path.name
+
+
+def infer_schedule_year_from_path(path):
+    match = re.search(r"(?:schedule|schedules)_(\d{4})", Path(path).stem, flags=re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+def schedule_source_paths(include_base=False):
+    paths = []
+    if include_base:
+        paths.append(BASE_DATA_FILES["games"])
+
+    paths.append(LIVE_SOURCES_DIR / "schedules.csv")
+
+    for root in (DATA_DIR, LIVE_SOURCES_DIR):
+        if not root.exists():
+            continue
+        for pattern in ("schedule_*.csv", "schedules_*.csv"):
+            paths.extend(root.glob(pattern))
+
+    unique_paths = []
+    seen = set()
+    for path in paths:
+        path = Path(path)
+        key = str(path).lower()
+        if key not in seen and path.exists():
+            seen.add(key)
+            unique_paths.append(path)
+    return unique_paths
+
+
+def live_roster_source_paths():
+    return list(LIVE_ROSTER_SOURCE_FILES.values())
+
+
+def season_roster_source_paths():
+    return roster_scoring.season_roster_source_paths(DATA_DIR)
+
+
+def data_file_signature():
+    paths = list(BASE_DATA_FILES.values()) + schedule_source_paths(include_base=False) + live_roster_source_paths() + season_roster_source_paths()
+    signature = []
+    for path in paths:
+        path = Path(path)
+        if path.exists():
+            stat = path.stat()
+            signature.append((relative_path_label(path), True, int(stat.st_mtime_ns), int(stat.st_size)))
+        else:
+            signature.append((relative_path_label(path), False, None, None))
+    return tuple(sorted(signature))
+
+
+def schedule_source_priority(path):
+    path = Path(path)
+    name = path.name.lower()
+    if infer_schedule_year_from_path(path) is not None:
+        return 0
+    if path.parent == LIVE_SOURCES_DIR and name == "schedules.csv":
+        return 5
+    if name == "games_2005_onward.csv":
+        return 50
+    return 20
+
+
+def load_schedule_source_frames(base_games):
+    sources = []
+    messages = []
+
+    if isinstance(base_games, pd.DataFrame) and not base_games.empty:
+        sources.append(
+            {
+                "path": str(BASE_DATA_FILES["games"]),
+                "label": "Historical/base schedule file",
+                "priority": schedule_source_priority(BASE_DATA_FILES["games"]),
+                "inferred_year": None,
+                "df": base_games.copy(),
+            }
+        )
+
+    for path in schedule_source_paths(include_base=False):
+        try:
+            schedule_df = pd.read_csv(path, low_memory=False)
+        except Exception as exc:
+            messages.append(f"Could not read schedule file {relative_path_label(path)}: {exc}")
+            continue
+
+        sources.append(
+            {
+                "path": str(path),
+                "label": "Actual schedule file",
+                "priority": schedule_source_priority(path),
+                "inferred_year": infer_schedule_year_from_path(path),
+                "df": schedule_df,
+            }
+        )
+
+    sources.sort(key=lambda source: (source["priority"], relative_path_label(source["path"])))
+    return sources, messages
+
+
+@st.cache_data(show_spinner=False)
+def load_data(file_signature=None):
     data = {}
     messages = []
 
-    for key, path in files.items():
+    for key, path in BASE_DATA_FILES.items():
         if not path.exists():
             data[key] = pd.DataFrame()
             messages.append(f"Missing file: {path.name}")
@@ -166,6 +362,34 @@ def load_data():
         except Exception as exc:
             data[key] = pd.DataFrame()
             messages.append(f"Could not read {path.name}: {exc}")
+
+    season_rosters, season_roster_messages = roster_scoring.load_season_roster_sources(DATA_DIR)
+    data["season_rosters"] = season_rosters
+    messages.extend(season_roster_messages)
+
+    future_data = {}
+    future_sources = {}
+    for key, path in LIVE_ROSTER_SOURCE_FILES.items():
+        if key not in LIVE_ROSTER_READ_KEYS:
+            continue
+
+        if not path.exists():
+            future_data[key] = pd.DataFrame()
+            continue
+
+        try:
+            future_data[key] = pd.read_csv(path, low_memory=False)
+            future_sources[key] = relative_path_label(path)
+        except Exception as exc:
+            future_data[key] = pd.DataFrame()
+            messages.append(f"Could not read live roster source {relative_path_label(path)}: {exc}")
+
+    data["future_data"] = future_data
+    data["future_sources"] = future_sources
+
+    schedule_sources, schedule_messages = load_schedule_source_frames(data.get("games", pd.DataFrame()))
+    data["schedule_sources"] = schedule_sources
+    messages.extend(schedule_messages)
 
     return data, messages
 
@@ -181,12 +405,446 @@ def clean_numeric_columns(df, columns):
 def standardize_team_season(df):
     output = df.copy()
     if "team" in output.columns:
-        output["team"] = output["team"].astype(str).str.strip()
+        output["team"] = output["team"].map(normalize_team)
     if "season" in output.columns:
         output["season"] = pd.to_numeric(output["season"], errors="coerce")
         output = output.dropna(subset=["season"])
         output["season"] = output["season"].astype(int)
     return output
+
+
+def first_existing_column(df, candidates):
+    for column in candidates:
+        if column in df.columns:
+            return column
+    return None
+
+
+def team_context_maps(team_assets):
+    if not isinstance(team_assets, pd.DataFrame) or team_assets.empty:
+        return {}, {}
+
+    team_col = first_existing_column(team_assets, ["team_abbr", "team", "abbr"])
+    conf_col = first_existing_column(team_assets, ["team_conf", "conference", "conf"])
+    division_col = first_existing_column(team_assets, ["team_division", "division", "div"])
+
+    if team_col is None:
+        return {}, {}
+
+    context = team_assets.copy()
+    context["_team"] = context[team_col].map(normalize_team)
+
+    conf_lookup = (
+        context.dropna(subset=["_team"]).set_index("_team")[conf_col].astype(str).to_dict()
+        if conf_col is not None
+        else {}
+    )
+    division_lookup = (
+        context.dropna(subset=["_team"]).set_index("_team")[division_col].astype(str).to_dict()
+        if division_col is not None
+        else {}
+    )
+    return conf_lookup, division_lookup
+
+
+def regular_schedule_rows_for_year(schedule_source, schedule_year):
+    schedule = schedule_source.get("df", pd.DataFrame())
+    if not isinstance(schedule, pd.DataFrame) or schedule.empty:
+        return pd.DataFrame()
+
+    schedule = schedule.copy()
+    season_col = first_existing_column(schedule, ["season", "game_season"])
+    inferred_year = schedule_source.get("inferred_year")
+
+    if season_col is not None:
+        season_values = pd.to_numeric(schedule[season_col], errors="coerce")
+        schedule = schedule[season_values.eq(int(schedule_year))].copy()
+    elif inferred_year != int(schedule_year):
+        return pd.DataFrame()
+
+    if schedule.empty:
+        return pd.DataFrame()
+
+    game_type_col = first_existing_column(schedule, ["game_type", "season_type"])
+    if game_type_col is not None:
+        game_type = schedule[game_type_col].astype(str).str.upper().str.strip()
+        schedule = schedule[game_type.str.startswith("REG")].copy()
+
+    home_col = first_existing_column(schedule, ["home_team", "home"])
+    away_col = first_existing_column(schedule, ["away_team", "away"])
+    if home_col is None or away_col is None:
+        return pd.DataFrame()
+
+    schedule["_home_team"] = schedule[home_col].map(normalize_team)
+    schedule["_away_team"] = schedule[away_col].map(normalize_team)
+    schedule = schedule[(schedule["_home_team"] != "") & (schedule["_away_team"] != "")].copy()
+    return schedule
+
+
+def schedule_completion_status(schedule, schedule_year):
+    if schedule.empty:
+        return False, "No regular-season schedule rows found."
+
+    expected_games = expected_regular_season_games(schedule_year)
+    teams = pd.concat([schedule["_home_team"], schedule["_away_team"]], ignore_index=True)
+    team_counts = teams.value_counts()
+    if len(team_counts) < 30:
+        return False, f"Only {len(team_counts)} teams found in the schedule."
+    if team_counts.min() < expected_games:
+        return False, f"At least one team has fewer than {expected_games} scheduled games."
+    return True, f"{len(schedule)} games across {len(team_counts)} teams."
+
+
+def choose_schedule_for_year(schedule_sources, schedule_year):
+    incomplete_messages = []
+
+    for source in schedule_sources or []:
+        schedule = regular_schedule_rows_for_year(source, schedule_year)
+        complete, detail = schedule_completion_status(schedule, schedule_year)
+        source_path = relative_path_label(source.get("path", "schedule"))
+
+        if complete:
+            return schedule, source, detail, incomplete_messages
+
+        if not schedule.empty:
+            incomplete_messages.append(f"{source_path}: {detail}")
+
+    return pd.DataFrame(), None, "", incomplete_messages
+
+
+def available_schedule_years(schedule_sources):
+    years = set()
+    for source in schedule_sources or []:
+        schedule = source.get("df", pd.DataFrame())
+        if not isinstance(schedule, pd.DataFrame) or schedule.empty:
+            continue
+
+        season_col = first_existing_column(schedule, ["season", "game_season"])
+        if season_col is not None:
+            values = pd.to_numeric(schedule[season_col], errors="coerce").dropna().astype(int)
+            years.update(values.unique().tolist())
+        elif source.get("inferred_year") is not None:
+            years.add(int(source["inferred_year"]))
+
+    return sorted(years)
+
+
+def strength_lookup_for_feature_year(model_df, feature_year):
+    if model_df.empty or "season" not in model_df.columns or "team" not in model_df.columns:
+        return {}, pd.NA, None, ""
+
+    available_years = sorted(
+        pd.to_numeric(model_df["season"], errors="coerce")
+        .dropna()
+        .astype(int)
+        .loc[lambda seasons: seasons <= int(feature_year)]
+        .unique()
+        .tolist()
+    )
+    if not available_years:
+        return {}, pd.NA, None, ""
+
+    strength_year = available_years[-1]
+    strength_df = model_df[pd.to_numeric(model_df["season"], errors="coerce").eq(strength_year)].copy()
+
+    strength_col = first_existing_column(
+        strength_df,
+        ["gini_score", "custom_estat", "overall_estat", "scoring_margin_signal", "point_diff_per_game"],
+    )
+    if strength_col is None:
+        return {}, pd.NA, strength_year, ""
+
+    strength_df["_team"] = strength_df["team"].map(normalize_team)
+    strength_df["_strength"] = pd.to_numeric(strength_df[strength_col], errors="coerce")
+    strength_df = strength_df.dropna(subset=["_team", "_strength"])
+    if strength_df.empty:
+        return {}, pd.NA, strength_year, display_label(strength_col)
+
+    league_avg = float(strength_df["_strength"].mean())
+    lookup = strength_df.drop_duplicates("_team").set_index("_team")["_strength"].to_dict()
+    return lookup, league_avg, strength_year, display_label(strength_col)
+
+
+def schedule_location_for_team(row, is_home_team):
+    location = str(row.get("location", "")).strip().lower()
+    if "neutral" in location:
+        return "neutral"
+    return "home" if is_home_team else "away"
+
+
+def venue_difficulty_adjustment(location):
+    if location == "home":
+        return -HOME_FIELD_SCHEDULE_ADJUSTMENT
+    if location == "away":
+        return AWAY_FIELD_SCHEDULE_ADJUSTMENT
+    return NEUTRAL_FIELD_SCHEDULE_ADJUSTMENT
+
+
+def calculate_projection_schedule_features(
+    schedule,
+    schedule_year,
+    feature_year,
+    strength_lookup,
+    league_avg_strength,
+    strength_year,
+    strength_label,
+    team_assets,
+    source,
+    source_detail,
+):
+    conf_lookup, division_lookup = team_context_maps(team_assets)
+    div_col = first_existing_column(schedule, ["div_game", "division_game"])
+    week_col = first_existing_column(schedule, ["week", "game_week", "week_number"])
+    home_rest_col = first_existing_column(schedule, ["home_rest"])
+    away_rest_col = first_existing_column(schedule, ["away_rest"])
+    entries = []
+
+    for _, row in schedule.iterrows():
+        home = normalize_team(row.get("_home_team"))
+        away = normalize_team(row.get("_away_team"))
+        if not home or not away:
+            continue
+
+        game_week = pd.to_numeric(row.get(week_col), errors="coerce") if week_col else pd.NA
+        div_game_value = pd.to_numeric(row.get(div_col), errors="coerce") if div_col else pd.NA
+        home_rest = pd.to_numeric(row.get(home_rest_col), errors="coerce") if home_rest_col else pd.NA
+        away_rest = pd.to_numeric(row.get(away_rest_col), errors="coerce") if away_rest_col else pd.NA
+
+        for team, opponent, is_home_team in ((home, away, True), (away, home, False)):
+            opponent_strength = strength_lookup.get(opponent, league_avg_strength)
+            location = schedule_location_for_team(row, is_home_team)
+            venue_adjustment = venue_difficulty_adjustment(location)
+
+            if pd.notna(home_rest) and pd.notna(away_rest):
+                rest_advantage = float(home_rest - away_rest) if is_home_team else float(away_rest - home_rest)
+            else:
+                rest_advantage = pd.NA
+
+            rest_adjustment = -0.15 * float(rest_advantage) if pd.notna(rest_advantage) else 0.0
+
+            team_conf = conf_lookup.get(team)
+            opponent_conf = conf_lookup.get(opponent)
+            team_division = division_lookup.get(team)
+            opponent_division = division_lookup.get(opponent)
+            conference_game = int(team_conf == opponent_conf) if team_conf and opponent_conf else pd.NA
+            if pd.notna(div_game_value):
+                division_game = int(float(div_game_value) == 1)
+            elif team_division and opponent_division:
+                division_game = int(team_division == opponent_division)
+            else:
+                division_game = pd.NA
+
+            entries.append(
+                {
+                    "season": int(feature_year),
+                    "team": team,
+                    "projection_year": int(schedule_year),
+                    "projection_week": game_week,
+                    "projection_opponent": opponent,
+                    "projection_opponent_strength": opponent_strength,
+                    "projection_location": location,
+                    "projection_venue_adjustment": venue_adjustment,
+                    "projection_rest_advantage": rest_advantage,
+                    "projection_adjusted_opponent_strength": opponent_strength + venue_adjustment + rest_adjustment,
+                    "projection_division_game": division_game,
+                    "projection_conference_game": conference_game,
+                }
+            )
+
+    if not entries:
+        return pd.DataFrame()
+
+    games_df = pd.DataFrame(entries)
+    grouped = (
+        games_df.groupby(["season", "team"], as_index=False)
+        .agg(
+            projection_schedule_games=("projection_opponent", "count"),
+            projection_schedule_strength=("projection_opponent_strength", "mean"),
+            projection_schedule_adjusted_strength=("projection_adjusted_opponent_strength", "mean"),
+            projection_home_games=("projection_location", lambda values: int((values == "home").sum())),
+            projection_away_games=("projection_location", lambda values: int((values == "away").sum())),
+            projection_neutral_games=("projection_location", lambda values: int((values == "neutral").sum())),
+            projection_division_games=("projection_division_game", "sum"),
+            projection_conference_games=("projection_conference_game", "sum"),
+            projection_avg_rest_advantage=("projection_rest_advantage", "mean"),
+        )
+    )
+    grouped["projection_nonconference_games"] = grouped["projection_schedule_games"] - grouped["projection_conference_games"].fillna(0)
+    grouped["projection_sos_rank"] = grouped["projection_schedule_adjusted_strength"].rank(ascending=False, method="min")
+    grouped["projection_schedule_year"] = int(schedule_year)
+    grouped["projection_schedule_feature_year"] = int(feature_year)
+    grouped["projection_opponent_strength_year"] = int(strength_year) if strength_year is not None else pd.NA
+    grouped["projection_opponent_strength_source"] = f"{strength_year} {strength_label}".strip()
+    grouped["projection_schedule_source"] = relative_path_label(source.get("path", "schedule"))
+    grouped["projection_schedule_status"] = (
+        f"Using actual {schedule_year} schedule from {grouped['projection_schedule_source'].iloc[0]} "
+        f"({source_detail}); opponent strength source: {grouped['projection_opponent_strength_source'].iloc[0]}."
+    )
+    return grouped
+
+
+def add_projection_schedule_features(model_df, schedule_sources, team_assets):
+    if model_df.empty or "season" not in model_df.columns or "team" not in model_df.columns:
+        return model_df, []
+
+    output = model_df.copy()
+    feature_frames = []
+    notes = []
+    seasons = sorted(pd.to_numeric(output["season"], errors="coerce").dropna().astype(int).unique())
+
+    for feature_year in seasons:
+        schedule_year = feature_year + 1
+        schedule, source, source_detail, incomplete_messages = choose_schedule_for_year(schedule_sources, schedule_year)
+        if source is None or schedule.empty:
+            if incomplete_messages:
+                notes.append(
+                    f"Projection schedule fallback for {schedule_year}: actual schedule rows were incomplete. "
+                    + " | ".join(incomplete_messages[:2])
+                )
+            continue
+
+        strength_lookup, league_avg_strength, strength_year, strength_label = strength_lookup_for_feature_year(output, feature_year)
+        if not strength_lookup or pd.isna(league_avg_strength):
+            notes.append(f"Projection schedule fallback for {schedule_year}: no opponent strength data was available through {feature_year}.")
+            continue
+
+        schedule_features = calculate_projection_schedule_features(
+            schedule,
+            schedule_year,
+            feature_year,
+            strength_lookup,
+            league_avg_strength,
+            strength_year,
+            strength_label,
+            team_assets,
+            source,
+            source_detail,
+        )
+        if not schedule_features.empty:
+            feature_frames.append(schedule_features)
+
+    if not feature_frames:
+        return output, notes
+
+    schedule_feature_df = pd.concat(feature_frames, ignore_index=True)
+    output = output.merge(schedule_feature_df, on=["season", "team"], how="left")
+    return output, notes
+
+
+def empty_player_stats():
+    return {
+        "weekly": pd.DataFrame(),
+        "seasonal": pd.DataFrame(),
+        "snaps": pd.DataFrame(),
+        "injuries": pd.DataFrame(),
+    }
+
+
+def roster_file_source_label(roster_file):
+    if roster_file == "nfl_season_rosters_clean_2005_2025.csv":
+        return relative_path_label(BASE_DATA_FILES["roster"])
+    if roster_file and roster_file != "No roster file found":
+        roster_path = Path(str(roster_file))
+        if roster_path.is_absolute() or roster_path.exists():
+            return relative_path_label(roster_path)
+        return f"data/{roster_path.name}"
+    return None
+
+
+def player_stat_source_files(player_stats):
+    sources = []
+    if not player_stats.get("weekly", pd.DataFrame()).empty:
+        sources.append(relative_path_label(LIVE_ROSTER_SOURCE_FILES["player_weekly_stats"]))
+    if not player_stats.get("seasonal", pd.DataFrame()).empty:
+        sources.append(relative_path_label(LIVE_ROSTER_SOURCE_FILES["player_season_stats"]))
+    if not player_stats.get("snaps", pd.DataFrame()).empty:
+        sources.append(relative_path_label(LIVE_ROSTER_SOURCE_FILES["player_snap_counts"]))
+    return sources
+
+
+def add_projection_roster_features(model_df, historical_roster=None, season_rosters=None, future_data=None):
+    if model_df.empty or "season" not in model_df.columns or "team" not in model_df.columns:
+        return model_df, []
+
+    output = model_df.copy()
+    notes = [
+        "Using the shared Live Leaderboard roster score for projection roster context; historical backtests use local season rosters and current/future projections use live roster/depth/player files when available."
+    ]
+    feature_frames = []
+    seasons = sorted(pd.to_numeric(output["season"], errors="coerce").dropna().astype(int).unique())
+    if not seasons:
+        return output, notes
+
+    live_context_start_year = int(max(seasons)) + 1
+    live_player_stats, _ = roster_scoring.load_player_stats(future_data or {})
+    live_player_stats = roster_scoring.standardize_player_stats(live_player_stats)
+    blank_player_stats = empty_player_stats()
+
+    for feature_year in seasons:
+        roster_context_year = int(feature_year) + 1
+        team_universe = sorted(output.loc[output["season"].eq(feature_year), "team"].dropna().astype(str).unique())
+        if not team_universe:
+            continue
+
+        use_live_sources = roster_context_year >= live_context_start_year
+        context_future_data = future_data if use_live_sources else {}
+        player_stats = live_player_stats if use_live_sources else blank_player_stats
+
+        local_roster, roster_file, _ = roster_scoring.load_local_roster(
+            roster_context_year,
+            historical_roster if historical_roster is not None else pd.DataFrame(),
+            season_rosters or {},
+        )
+        roster_context, context_info = roster_scoring.build_roster_context(local_roster, context_future_data, roster_context_year)
+        roster_scores = roster_scoring.calculate_team_roster_score(
+            roster_context,
+            roster_context_year,
+            team_universe,
+            historical_roster=historical_roster if historical_roster is not None else pd.DataFrame(),
+            transactions=roster_scoring.load_transaction_feed(context_future_data),
+            player_stats=player_stats,
+        )
+        if roster_scores.empty:
+            continue
+
+        source_files = set(context_info.get("source_files", []))
+        roster_source = roster_file_source_label(roster_file)
+        if roster_source and not context_info.get("used_live_roster"):
+            source_files.add(roster_source)
+        if use_live_sources:
+            source_files.update(player_stat_source_files(player_stats))
+        source_summary = ", ".join(sorted(source_files)) if source_files else "neutral roster defaults"
+
+        rename_map = {
+            column: f"projection_{column}"
+            for column in roster_scoring.ROSTER_SCORE_COLUMNS
+            if column != "team"
+        }
+        roster_scores = roster_scores.rename(columns=rename_map)
+        roster_scores["season"] = int(feature_year)
+        roster_scores["projection_roster_context_year"] = int(roster_context_year)
+        roster_scores["projection_roster_source_files"] = source_summary
+        roster_scores["projection_roster_status"] = (
+            f"{context_info.get('status', 'Using Live Leaderboard roster score.')} "
+            f"Source files: {source_summary}."
+        )
+        roster_scores["projection_roster_used_live_sources"] = bool(use_live_sources)
+
+        unique_roster_scores = pd.to_numeric(roster_scores.get("projection_roster_score"), errors="coerce").round(4).nunique(dropna=True)
+        if use_live_sources:
+            notes.append(f"Using Live Leaderboard roster score for {roster_context_year} projections from {source_summary}.")
+        if unique_roster_scores <= 1:
+            notes.append(f"Projection roster scores for {roster_context_year} are not varying across teams; using neutral roster defaults for that context.")
+
+        feature_frames.append(roster_scores)
+
+    if not feature_frames:
+        notes.append("Projection roster score fallback: no roster context rows were available.")
+        return output, notes
+
+    roster_feature_df = pd.concat(feature_frames, ignore_index=True)
+    output = output.merge(roster_feature_df, on=["season", "team"], how="left")
+    return output, notes
 
 
 def calculate_team_records(team_game, games):
@@ -269,7 +927,8 @@ def calculate_team_records(team_game, games):
     return records, postseason_records, notes
 
 
-def build_model_dataset(team_season, team_game, games):
+@st.cache_data(show_spinner=False)
+def build_model_dataset(team_season, team_game, games, schedule_sources=None, team_assets=None, historical_roster=None, season_rosters=None, future_data=None):
     notes = []
     missing_columns = []
 
@@ -435,6 +1094,17 @@ def build_model_dataset(team_season, team_game, games):
     else:
         notes.append("Next-season targets are unavailable because current-season wins could not be calculated.")
 
+    model_df, schedule_notes = add_projection_schedule_features(model_df, schedule_sources or [], team_assets)
+    notes.extend(schedule_notes)
+
+    model_df, roster_notes = add_projection_roster_features(
+        model_df,
+        historical_roster=historical_roster,
+        season_rosters=season_rosters,
+        future_data=future_data,
+    )
+    notes.extend(roster_notes)
+
     return model_df, sorted(set(missing_columns)), notes
 
 
@@ -475,6 +1145,27 @@ def get_feature_candidates(model_df):
         "success_margin",
         "schedule_strength",
         "sos_rank",
+        "projection_schedule_strength",
+        "projection_schedule_adjusted_strength",
+        "projection_sos_rank",
+        "projection_schedule_games",
+        "projection_home_games",
+        "projection_away_games",
+        "projection_neutral_games",
+        "projection_division_games",
+        "projection_conference_games",
+        "projection_nonconference_games",
+        "projection_avg_rest_advantage",
+        "projection_roster_score",
+        "projection_qb_score",
+        "projection_offense_skill_score",
+        "projection_offensive_line_score",
+        "projection_defensive_front_score",
+        "projection_secondary_score",
+        "projection_premium_position_score",
+        "projection_availability_score",
+        "projection_rookie_projection_score",
+        "projection_continuity_score",
         "turnover_margin_per_game",
         "penalty_yards_margin_per_game",
         "offense_rank",
@@ -497,6 +1188,12 @@ def get_core_pythagorean_features(model_df):
         "point_diff_per_game",
         "points_for",
         "points_against",
+        "projection_roster_score",
+        "projection_schedule_adjusted_strength",
+        "projection_sos_rank",
+        "projection_home_games",
+        "projection_away_games",
+        "projection_neutral_games",
     ]
     return [column for column in candidates if column in model_df.columns]
 
@@ -1320,6 +2017,62 @@ def get_prediction_for_row(row, model_bundle):
     return predicted_wins, probability
 
 
+def debug_number(value, decimals=3):
+    if value is None or pd.isna(value):
+        return None
+    try:
+        return round(float(value), decimals)
+    except Exception:
+        return None
+
+
+def write_projection_debug_log(selected_year, model_df, model_bundle):
+    feature_year = int(selected_year) - 1
+    if model_df.empty or "season" not in model_df.columns or not model_bundle.get("available"):
+        return None
+
+    feature_slice = model_df[model_df["season"] == feature_year].copy()
+    if feature_slice.empty:
+        return None
+
+    rows = []
+    for _, row in feature_slice.sort_values("team").iterrows():
+        predicted_wins, probability = get_prediction_for_row(row, model_bundle)
+        rows.append(
+            {
+                "team": str(row.get("team")),
+                "selected_year": int(selected_year),
+                "feature_year": int(feature_year),
+                "schedule_year_used": debug_number(row.get("projection_schedule_year"), 0),
+                "roster_context_year": debug_number(row.get("projection_roster_context_year"), 0),
+                "roster_score": debug_number(row.get("projection_roster_score")),
+                "schedule_difficulty": debug_number(row.get("projection_schedule_adjusted_strength")),
+                "projected_wins": debug_number(predicted_wins),
+                "ten_plus_win_chance": debug_number(probability),
+                "roster_status": str(row.get("projection_roster_status", "")),
+                "schedule_status": str(row.get("projection_schedule_status", "")),
+            }
+        )
+
+    roster_scores = [row["roster_score"] for row in rows if row["roster_score"] is not None]
+    payload = {
+        "selected_year": int(selected_year),
+        "feature_year": int(feature_year),
+        "model_features": list(model_bundle.get("features", [])),
+        "uses_live_leaderboard_roster_score": "projection_roster_score" in model_bundle.get("features", []),
+        "roster_score_unique_count": len(set(roster_scores)),
+        "rows": rows,
+    }
+
+    try:
+        PREDICTIVE_MODEL_DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        PREDICTIVE_MODEL_DEBUG_LOG_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except Exception as exc:
+        return f"Could not write predictive model debug log: {exc}"
+
+    return None
+
+
 def get_playoff_prediction_for_row(row, playoff_bundle):
     if not playoff_bundle.get("available"):
         return None, None
@@ -2003,15 +2756,50 @@ div[data-testid="stSelectbox"] [data-baseweb="select"] > div {{
 # -----------------------------
 
 
-data, load_messages = load_data()
+file_signature = data_file_signature()
+data, load_messages = load_data(file_signature)
 team_season = data["team_season"]
+
+predictive_refresh_season = int(pd.Timestamp.now(tz="America/New_York").year)
+if not team_season.empty and "season" in team_season.columns:
+    available_refresh_seasons = pd.to_numeric(team_season["season"], errors="coerce").dropna()
+    if not available_refresh_seasons.empty:
+        predictive_refresh_season = int(available_refresh_seasons.max()) + 1
+
+live_source_refresh_ok, _ = refresh_live_sources_if_needed(predictive_refresh_season)
+if live_source_refresh_ok:
+    st.cache_data.clear()
+    file_signature = data_file_signature()
+    data, load_messages = load_data(file_signature)
+    team_season = data["team_season"]
+
 team_game = data["team_game"]
 games = data["games"]
 team_assets = data["team_assets"]
+schedule_sources = data.get("schedule_sources", [])
+historical_roster = data.get("roster", pd.DataFrame())
+season_rosters = data.get("season_rosters", {})
+future_data = data.get("future_data", {})
 
-model_df, skipped_columns, build_notes = build_model_dataset(team_season, team_game, games)
+model_df, skipped_columns, build_notes = build_model_dataset(
+    team_season,
+    team_game,
+    games,
+    schedule_sources=schedule_sources,
+    team_assets=team_assets,
+    historical_roster=historical_roster,
+    season_rosters=season_rosters,
+    future_data=future_data,
+)
 model_bundle = train_models(model_df)
 playoff_model_bundle = train_playoff_models(model_df)
+
+if live_source_refresh_ok:
+    record_model_recalculation(
+        "Predictive Model",
+        "Streamlit cache was cleared and predictive model inputs were reloaded after the live source refresh.",
+    )
+
 team_name_lookup = build_team_name_lookup(team_assets)
 team_theme_lookup = build_team_theme_lookup(team_assets)
 team_logo_lookup = build_team_logo_lookup(team_assets)
@@ -2041,11 +2829,24 @@ if model_df.empty:
 
 latest_completed_season = seasons_available[-1]
 future_prediction_year = latest_completed_season + 1
-prediction_year_options = sorted(set(seasons_available + [future_prediction_year]))
+actual_schedule_years = available_schedule_years(schedule_sources)
+scheduled_projection_years = [year for year in actual_schedule_years if year - 1 in seasons_available]
+prediction_year_options = sorted(set(seasons_available + [future_prediction_year] + scheduled_projection_years))
+season_options = sorted(prediction_year_options, reverse=True)
 
 default_season = future_prediction_year
-stored_season = int(st.session_state.get("predictor_selected_season", default_season))
-selected_season = stored_season if stored_season in prediction_year_options else default_season
+session_season_value = st.session_state.get(
+    "predictor_selected_season_control",
+    st.session_state.get("predictor_selected_season", default_season),
+)
+try:
+    session_season = int(session_season_value)
+except Exception:
+    session_season = default_season
+selected_season = session_season if session_season in prediction_year_options else default_season
+st.session_state["predictor_selected_season"] = selected_season
+if st.session_state.get("predictor_selected_season_control") not in season_options:
+    st.session_state.pop("predictor_selected_season_control", None)
 
 season_slice = model_df[model_df["season"] == selected_season].copy()
 feature_year_for_controls = selected_season - 1
@@ -2054,8 +2855,25 @@ team_source_slice = season_slice if not season_slice.empty else feature_slice_fo
 
 teams_available = sorted(team_source_slice["team"].dropna().astype(str).unique())
 default_team = "DEN" if "DEN" in teams_available else teams_available[0]
-stored_team = str(st.session_state.get("predictor_selected_team", default_team))
-selected_team = stored_team if stored_team in teams_available else default_team
+team_label_lookup = {
+    team: team_display_name(team, team_name_lookup, include_abbr=False)
+    for team in teams_available
+}
+team_abbr_lookup = {label: team for team, label in team_label_lookup.items()}
+team_options = list(team_label_lookup.values())
+control_team_value = st.session_state.get("predictor_selected_team_control")
+if control_team_value in team_abbr_lookup:
+    selected_team = team_abbr_lookup[control_team_value]
+else:
+    stored_team = str(st.session_state.get("predictor_selected_team", default_team))
+    selected_team = stored_team if stored_team in teams_available else default_team
+selected_team_label = team_label_lookup.get(selected_team, selected_team)
+st.session_state["predictor_selected_team"] = selected_team
+if st.session_state.get("predictor_selected_team_control") not in team_options:
+    st.session_state.pop("predictor_selected_team_control", None)
+projection_debug_log_message = write_projection_debug_log(selected_season, model_df, model_bundle)
+if projection_debug_log_message:
+    build_notes.append(projection_debug_log_message)
 selected_label = team_display_name(selected_team, team_name_lookup, include_abbr=False)
 selected_team_name = team_name_lookup.get(selected_team, selected_team)
 selected_theme = get_team_theme(selected_team, team_theme_lookup)
@@ -2307,37 +3125,19 @@ The forecast reads the Gini profile, expected-wins profile, scoring efficiency, 
 st.markdown('<div class="predict-controls-title">Predictor Controls</div>', unsafe_allow_html=True)
 control_team_col, control_season_col = st.columns([2.35, 0.9], gap="large")
 
-team_label_lookup = {
-    team: team_display_name(team, team_name_lookup, include_abbr=False)
-    for team in teams_available
-}
-team_abbr_lookup = {label: team for team, label in team_label_lookup.items()}
-team_options = list(team_label_lookup.values())
-selected_team_label = team_label_lookup.get(selected_team, selected_team)
-if st.session_state.get("predictor_selected_team_control") not in team_options:
-    st.session_state.pop("predictor_selected_team_control", None)
-selected_team_choice = control_team_col.selectbox(
+control_team_col.selectbox(
     "Team",
     team_options,
     index=team_options.index(selected_team_label) if selected_team_label in team_options else 0,
     key="predictor_selected_team_control",
 )
 
-season_options = sorted(prediction_year_options, reverse=True)
-if st.session_state.get("predictor_selected_season_control") not in season_options:
-    st.session_state.pop("predictor_selected_season_control", None)
-selected_season_choice = control_season_col.selectbox(
+control_season_col.selectbox(
     "Season",
     season_options,
     index=season_options.index(selected_season),
     key="predictor_selected_season_control",
 )
-
-new_selected_team = team_abbr_lookup.get(selected_team_choice, selected_team_choice)
-if int(selected_season_choice) != selected_season or new_selected_team != selected_team:
-    st.session_state["predictor_selected_season"] = int(selected_season_choice)
-    st.session_state["predictor_selected_team"] = new_selected_team
-    st.rerun()
 
 
 # -----------------------------
@@ -2399,8 +3199,37 @@ with tab_regular:
     if selected_rows.empty:
         st.warning(f"No {feature_year} team-season row found for this selection. The model needs the completed prior season to project {prediction_target_year}.")
     else:
-        selected_row = selected_rows.iloc[0]
+        selected_row = selected_rows.iloc[0].copy()
         target_row = target_rows.iloc[0] if not target_rows.empty else None
+        projection_schedule_year_value = pd.to_numeric(selected_row.get("projection_schedule_year"), errors="coerce")
+        uses_actual_schedule = pd.notna(projection_schedule_year_value) and int(projection_schedule_year_value) == int(prediction_target_year)
+        if uses_actual_schedule:
+            schedule_status_text = str(selected_row.get("projection_schedule_status", f"Using actual {prediction_target_year} schedule."))
+            projection_input_helper = f"Uses {feature_year} full-season profile + actual {prediction_target_year} schedule"
+        else:
+            schedule_status_text = (
+                f"No complete actual {prediction_target_year} schedule was found for projection inputs. "
+                "The model is using the prior completed profile without a selected-year schedule overlay."
+            )
+            projection_input_helper = f"Uses {feature_year} full-season profile"
+
+        roster_score_value = pd.to_numeric(selected_row.get("projection_roster_score"), errors="coerce")
+        roster_context_year_value = pd.to_numeric(selected_row.get("projection_roster_context_year"), errors="coerce")
+        uses_roster_score = pd.notna(roster_score_value)
+        if uses_roster_score:
+            roster_context_year_label = int(roster_context_year_value) if pd.notna(roster_context_year_value) else prediction_target_year
+            roster_status_text = str(
+                selected_row.get(
+                    "projection_roster_status",
+                    f"Using Live Leaderboard roster score for {roster_context_year_label} roster context.",
+                )
+            )
+            projection_input_helper += " + Live Leaderboard roster score"
+        else:
+            roster_status_text = (
+                f"No Live Leaderboard roster score was available for {prediction_target_year}. "
+                "The model is using the prior completed profile without a selected-year roster overlay."
+            )
 
         predicted_wins, probability = get_prediction_for_row(selected_row, model_bundle)
         projected_wins = max(0, min(17, predicted_wins)) if predicted_wins is not None else None
@@ -2473,6 +3302,26 @@ with tab_regular:
         if projected_wins is not None and pd.notna(projected_wins):
             profile_reasons.append(f"rolling backtest model projects {float(projected_wins):.1f} wins for {prediction_target_year}")
 
+        if uses_actual_schedule:
+            schedule_rank = pd.to_numeric(selected_row.get("projection_sos_rank"), errors="coerce")
+            schedule_strength = pd.to_numeric(selected_row.get("projection_schedule_adjusted_strength"), errors="coerce")
+            schedule_games = pd.to_numeric(selected_row.get("projection_schedule_games"), errors="coerce")
+            schedule_reason = f"actual {prediction_target_year} schedule is included"
+            if pd.notna(schedule_rank) and pd.notna(schedule_strength):
+                schedule_reason = (
+                    f"actual {prediction_target_year} schedule ranks {int(schedule_rank)} in difficulty "
+                    f"at {float(schedule_strength):.1f} adjusted opponent strength"
+                )
+            if pd.notna(schedule_games):
+                schedule_reason += f" across {int(schedule_games)} games"
+            profile_reasons.insert(1 if profile_reasons else 0, schedule_reason)
+
+        if uses_roster_score:
+            profile_reasons.insert(
+                2 if len(profile_reasons) >= 2 else len(profile_reasons),
+                f"Live Leaderboard roster score is {float(roster_score_value):.1f} for {prediction_target_year} roster context",
+            )
+
         reasons_html = "".join(f"<li>{reason}</li>" for reason in profile_reasons[:5])
 
         selected_theme = get_team_theme(selected_team, team_theme_lookup)
@@ -2491,7 +3340,7 @@ with tab_regular:
             render_metric_card(
                 f"Projected {prediction_target_year} Wins",
                 win_text(projected_wins, 1) if projected_wins is not None else "Model unavailable",
-                f"Uses {feature_year} full-season profile",
+                projection_input_helper,
                 accent=team_secondary,
             )
         with metric_cols[2]:
@@ -2569,15 +3418,25 @@ with tab_regular:
                 feature_text = ", ".join(display_label(feature) for feature in model_bundle.get("features", []))
                 within_two = model_bundle.get("metrics", {}).get("within_two_wins")
                 within_two_line = f"<br>Within two wins: {within_two * 100:.1f}%." if within_two is not None and pd.notna(within_two) else ""
+                probability_line = (
+                    f"<br>{prediction_target_year} 10+ win chance: {percent_text(probability)}."
+                    if probability is not None and pd.notna(probability)
+                    else ""
+                )
                 st.markdown(
                     f"""
 <div class="predict-card explain-box">
     The regular-season model uses: {feature_text}.
     <br><br>
+    Schedule input: {schedule_status_text}
+    <br><br>
+    Roster input: {roster_status_text}
+    <br><br>
     Best rolling-backtest model: {model_bundle['metrics']['best_model_name']}.
     <br>Rolling MAE: {model_bundle['metrics']['model_mae']:.2f} wins.
     Simple previous-wins baseline MAE: {model_bundle['metrics']['baseline_mae']:.2f} wins.
     {within_two_line}
+    {probability_line}
 </div>
 """,
                     unsafe_allow_html=True,

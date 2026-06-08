@@ -1,5 +1,6 @@
 from pathlib import Path
 from io import BytesIO
+from time import perf_counter
 import base64
 import sys
 
@@ -61,8 +62,37 @@ SUPER_BOWL_WINNERS = {
 }
 
 
-@st.cache_data
-def load_super_square_data():
+SUPER_SQUARE_SOURCE_FILES = {
+    "team_season": DATA_DIR / "team_season_estat.csv",
+    "team_game": DATA_DIR / "team_game_estat.csv",
+    "team_assets": DATA_DIR / "teams_colors_logos.csv",
+}
+
+
+def relative_source_label(path):
+    path = Path(path)
+    try:
+        return str(path.relative_to(APP_DIR)).replace("\\", "/")
+    except Exception:
+        return str(path)
+
+
+def source_file_signature_entry(path):
+    path = Path(path)
+    if not path.exists():
+        return (relative_source_label(path), False, None, None)
+    stat = path.stat()
+    return (relative_source_label(path), True, int(stat.st_mtime_ns), int(stat.st_size))
+
+
+def super_square_file_signature():
+    return tuple(
+        sorted(source_file_signature_entry(path) for path in SUPER_SQUARE_SOURCE_FILES.values())
+    )
+
+
+@st.cache_data(show_spinner=False)
+def load_super_square_data(file_signature=None):
     team_season = pd.read_csv(DATA_DIR / "team_season_estat.csv")
     team_game = pd.read_csv(DATA_DIR / "team_game_estat.csv")
     assets_path = DATA_DIR / "teams_colors_logos.csv"
@@ -945,15 +975,23 @@ def calculate_cusp_status(rule_df, cusp_cap=CUSP_CAP):
     return rule_df
 
 
-# -----------------------------
-# LOAD DATA + INTERNAL RESEARCH
-# -----------------------------
+@st.cache_data(show_spinner=False)
+def build_super_square_payload(file_signature):
+    timings = {}
 
-team_season, team_game, team_assets = load_super_square_data()
-logo_lookup, name_lookup = build_team_lookups(team_assets)
+    def mark_timing(label, start_time):
+        timings[label] = round(perf_counter() - start_time, 4)
 
-try:
+    step_start = perf_counter()
+    team_season, team_game, team_assets = load_super_square_data(file_signature)
+    logo_lookup, name_lookup = build_team_lookups(team_assets)
+    mark_timing("csv_loading", step_start)
+
+    step_start = perf_counter()
     super_square_data = prepare_super_square_metrics(team_season, team_game)
+    mark_timing("checkpoint_metric_calculation", step_start)
+
+    step_start = perf_counter()
     gate_config = research_five_gate_super_square(
         super_square_data,
         SUPER_BOWL_WINNERS,
@@ -965,17 +1003,93 @@ try:
         super_square_data,
         SUPER_BOWL_WINNERS,
     )
+    mark_timing("super_square_scoring", step_start)
+
+    step_start = perf_counter()
+    chart_df = super_square_data.copy()
+    chart_df["Team Name"] = chart_df["Team"].map(name_lookup).fillna(chart_df["Team"])
+    chart_df["Is Champion"] = chart_df.apply(
+        lambda row: SUPER_BOWL_WINNERS.get(int(row["season"])) == row["Team"],
+        axis=1,
+    )
+    chart_df["Super Bowl Champion"] = np.where(
+        chart_df["Is Champion"],
+        "Yes",
+        "No",
+    )
+
+    for rank_col in [
+        "gini_rank",
+        "point_diff_rank",
+        "epa_diff_rank",
+        "best_unit_rank",
+        "checkpoint_rank",
+    ]:
+        chart_df[f"{rank_col}_label"] = chart_df[rank_col].apply(
+            lambda value: "N/A" if pd.isna(value) else str(int(value))
+        )
+
+    chart_df["control_score_label"] = chart_df["Control Profile Score"].round(1)
+    chart_df["unit_pressure_score_label"] = chart_df["Unit Pressure Score"].round(1)
+
+    valid_champion_validation = champion_validation[
+        champion_validation["valid_data"]
+    ].copy()
+    all_valid_champions_inside = (
+        not valid_champion_validation.empty
+        and bool(valid_champion_validation["inside"].all())
+    )
+    available_seasons = sorted(
+        [
+            int(season)
+            for season in chart_df["season"].dropna().unique()
+            if 2005 <= int(season) <= 2025
+        ],
+        reverse=True,
+    )
+    mark_timing("chart_dataframe_construction", step_start)
+
+    timings["total_payload_build"] = round(sum(timings.values()), 4)
+    print(f"Super Square payload build timings: {timings}")
+
+    return {
+        "selected_year_options": available_seasons,
+        "chart_df": chart_df,
+        "quadrant_df": chart_df,
+        "cusp_df": chart_df[chart_df["On the Cusp"]].copy(),
+        "champion_lookup": SUPER_BOWL_WINNERS,
+        "champion_validation": champion_validation,
+        "valid_champion_validation": valid_champion_validation,
+        "all_valid_champions_inside": all_valid_champions_inside,
+        "gate_config": gate_config,
+        "logo_lookup": logo_lookup,
+        "name_lookup": name_lookup,
+        "load_messages": [],
+        "build_timings": timings,
+    }
+
+
+# -----------------------------
+# LOAD DATA + INTERNAL RESEARCH
+# -----------------------------
+
+try:
+    file_signature = super_square_file_signature()
+    payload = build_super_square_payload(file_signature)
 except ValueError as err:
     st.error(str(err))
     st.stop()
 
-valid_champion_validation = champion_validation[
-    champion_validation["valid_data"]
-].copy()
-all_valid_champions_inside = (
-    not valid_champion_validation.empty
-    and bool(valid_champion_validation["inside"].all())
-)
+super_square_data = payload["chart_df"]
+gate_config = payload["gate_config"]
+champion_validation = payload["champion_validation"]
+valid_champion_validation = payload["valid_champion_validation"]
+all_valid_champions_inside = payload["all_valid_champions_inside"]
+logo_lookup = payload["logo_lookup"]
+name_lookup = payload["name_lookup"]
+available_seasons = payload["selected_year_options"]
+print(f"Super Square payload timings (cached or rebuilt): {payload.get('build_timings', {})}")
+page_render_start = perf_counter()
 
 
 # -----------------------------
@@ -1527,15 +1641,6 @@ The Super Square studies the regular-season traits that repeatedly show up in Su
 # CONTROLS
 # -----------------------------
 
-available_seasons = sorted(
-    [
-        int(season)
-        for season in super_square_data["season"].dropna().unique()
-        if 2005 <= int(season) <= 2025
-    ],
-    reverse=True,
-)
-
 season_col, reveal_col = st.columns([1, 1], gap="large")
 
 with season_col:
@@ -1584,29 +1689,7 @@ if season_df.empty:
     st.error("No Super Square data found for the selected season.")
     st.stop()
 
-season_df["Team Name"] = season_df["Team"].map(name_lookup).fillna(season_df["Team"])
-
 champion = SUPER_BOWL_WINNERS.get(selected_season)
-season_df["Is Champion"] = season_df["Team"] == champion
-season_df["Super Bowl Champion"] = np.where(
-    season_df["Is Champion"],
-    "Yes",
-    "No",
-)
-
-for rank_col in [
-    "gini_rank",
-    "point_diff_rank",
-    "epa_diff_rank",
-    "best_unit_rank",
-    "checkpoint_rank",
-]:
-    season_df[f"{rank_col}_label"] = season_df[rank_col].apply(
-        lambda value: "N/A" if pd.isna(value) else str(int(value))
-    )
-
-season_df["control_score_label"] = season_df["Control Profile Score"].round(1)
-season_df["unit_pressure_score_label"] = season_df["Unit Pressure Score"].round(1)
 
 inside_count = int(season_df["Inside Super Square"].sum())
 cusp_count = int(season_df["On the Cusp"].sum())
@@ -1920,3 +2003,4 @@ st.markdown(
 )
 
 st.markdown("</div>", unsafe_allow_html=True)
+print(f"Super Square render timing: {round(perf_counter() - page_render_start, 4)}s")

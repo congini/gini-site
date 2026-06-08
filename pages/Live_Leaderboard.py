@@ -1,5 +1,6 @@
 from pathlib import Path
 from datetime import datetime, timezone, timedelta, time
+from time import perf_counter
 import base64
 import html
 import importlib
@@ -49,18 +50,23 @@ SNAPSHOT_PATH = DATA_DIR / "live_leaderboard_snapshot.csv"
 WEEKLY_HISTORY_PATH = DATA_DIR / "live_leaderboard_weekly_history.csv"
 LIVE_SOURCE_REFRESH_LOG_PATH = DATA_DIR / "live_sources" / "last_live_source_refresh.txt"
 LIVE_SOURCE_REFRESH_STATUS_PATH = DATA_DIR / "live_sources" / "last_live_source_refresh_status.json"
+DAILY_RELOAD_TIME = time(23, 59)
 WEEKLY_SNAPSHOT_CUTOFF_WEEKDAY = 1  # Tuesday, matching datetime.weekday()
-WEEKLY_SNAPSHOT_CUTOFF_TIME = time(12, 0)
+WEEKLY_SNAPSHOT_CUTOFF_TIME = time(23, 59)
 
-# nflverse currently has public season files through 2025 in this setup.
-# The leaderboard can still use 2026 local roster data, but live source pulls
-# should not request 2026 until nflverse publishes 2026 files.
+# nflverse live source pulls should use the latest published public season.
+# Local season roster files can still provide the current/future roster context.
 NFLVERSE_LIVE_SOURCE_FALLBACK_SEASON = datetime.now().year - 1
 
 if str(APP_DIR) not in sys.path:
     sys.path.append(str(APP_DIR))
 
 from site_nav import render_top_nav
+from live_source_refresh import (
+    record_model_recalculation,
+    refresh_live_sources_if_needed as run_live_source_refresh_if_needed,
+)
+import live_roster_scoring as roster_scoring
 
 
 PRIMARY = "#F15A24"
@@ -204,6 +210,55 @@ def current_hour_window_et(moment=None):
     return coerce_et(moment or now_et()).replace(minute=0, second=0, microsecond=0)
 
 
+def scheduled_daily_reload_at(day):
+    return datetime.combine(day, DAILY_RELOAD_TIME).replace(tzinfo=ET)
+
+
+def latest_daily_reload_due_time(moment=None):
+    moment = coerce_et(moment or now_et())
+    today_due = scheduled_daily_reload_at(moment.date())
+    if moment >= today_due:
+        return today_due
+    return today_due - timedelta(days=1)
+
+
+def next_daily_reload_time(moment=None):
+    moment = coerce_et(moment or now_et())
+    today_due = scheduled_daily_reload_at(moment.date())
+    if moment < today_due:
+        return today_due
+    return today_due + timedelta(days=1)
+
+
+def daily_snapshot_key(moment=None):
+    return latest_daily_reload_due_time(moment).date().isoformat()
+
+
+def milliseconds_until_next_daily_reload(moment=None):
+    moment = coerce_et(moment or now_et())
+    delay = next_daily_reload_time(moment) - moment
+    return max(1000, int(delay.total_seconds() * 1000))
+
+
+def schedule_daily_page_reload():
+    delay_ms = milliseconds_until_next_daily_reload()
+    if AUTOREFRESH_AVAILABLE:
+        st_autorefresh(interval=delay_ms, key="daily_1159_pm_reload")
+        return
+
+    components.html(
+        f"""
+<script>
+window.setTimeout(function() {{
+  window.parent.location.reload();
+}}, {delay_ms});
+</script>
+""",
+        height=0,
+        scrolling=False,
+    )
+
+
 def format_et_timestamp(dt, include_seconds=True):
     date_text = dt.strftime("%B %d, %Y")
     time_fmt = "%I:%M:%S %p" if include_seconds else "%I:%M %p"
@@ -253,17 +308,18 @@ def first_existing_source(key, fallback_path):
     return fallback_path, "Local CSV file"
 
 
-@st.cache_data(show_spinner=False, ttl=5 * 60)
-def load_data():
-    files = {
+def leaderboard_base_files():
+    return {
         "team_season": DATA_DIR / "team_season_estat.csv",
         "team_game": DATA_DIR / "team_game_estat.csv",
         "games": DATA_DIR / "games_2005_onward.csv",
         "historical_roster": DATA_DIR / "nfl_season_rosters_clean_2005_2025.csv",
-        "roster_2026": DATA_DIR / "roster_2026.csv",
         "team_assets": DATA_DIR / "teams_colors_logos.csv",
     }
-    future_fallback_files = {
+
+
+def leaderboard_future_fallback_files():
+    return {
         "player_weekly_stats": DATA_DIR / "player_weekly_stats.csv",
         "player_season_stats": DATA_DIR / "player_season_stats.csv",
         "players": DATA_DIR / "players.csv",
@@ -277,22 +333,215 @@ def load_data():
         "schedules": DATA_DIR / "games_2005_onward.csv",
         "teams": DATA_DIR / "teams_colors_logos.csv",
     }
+
+
+def relative_source_label(path):
+    path = Path(path)
+    try:
+        return str(path.relative_to(APP_DIR)).replace("\\", "/")
+    except Exception:
+        return str(path)
+
+
+def source_file_signature_entry(path):
+    path = Path(path)
+    if not path.exists():
+        return (relative_source_label(path), False, None, None)
+    stat = path.stat()
+    return (relative_source_label(path), True, int(stat.st_mtime_ns), int(stat.st_size))
+
+
+def live_leaderboard_source_paths():
+    paths = list(leaderboard_base_files().values())
+    paths.extend(roster_scoring.season_roster_source_paths(DATA_DIR))
+    paths.extend(LIVE_SOURCE_CACHE_FILES.values())
+    paths.extend(leaderboard_future_fallback_files().values())
+    paths.append(SNAPSHOT_PATH)
+
+    unique_paths = []
+    seen = set()
+    for path in paths:
+        path = Path(path)
+        key = str(path).lower()
+        if key not in seen:
+            seen.add(key)
+            unique_paths.append(path)
+    return unique_paths
+
+
+def live_leaderboard_file_signature():
+    return tuple(sorted(source_file_signature_entry(path) for path in live_leaderboard_source_paths()))
+
+
+@st.cache_data(show_spinner=False)
+def load_data(file_signature=None):
+    files = leaderboard_base_files()
+    future_fallback_files = leaderboard_future_fallback_files()
     data, future_data, messages, future_sources = {}, {}, [], {}
     for key, path in files.items():
         data[key], message = safe_read_csv(path)
         if message:
             messages.append(message)
+    season_rosters, season_roster_messages = roster_scoring.load_season_roster_sources(DATA_DIR)
+    data["season_rosters"] = season_rosters
+    messages.extend(season_roster_messages)
     for key, fallback_path in future_fallback_files.items():
         path, source_type = first_existing_source(key, fallback_path)
         future_sources[key] = {"path": str(path), "source_type": source_type, "exists": path.exists()}
         future_data[key], message = safe_read_csv(path) if path.exists() else (pd.DataFrame(), "")
         if message:
             messages.append(message)
-    mtimes = [path.stat().st_mtime for path in list(files.values()) + [Path(info["path"]) for info in future_sources.values()] if path.exists()]
+    season_roster_paths = [Path(info["path"]) for info in season_rosters.values() if isinstance(info, dict) and info.get("path")]
+    mtimes = [path.stat().st_mtime for path in list(files.values()) + season_roster_paths + [Path(info["path"]) for info in future_sources.values()] if path.exists()]
     load_time = now_et()
     source_mtime = datetime.fromtimestamp(max(mtimes), ET) if mtimes else load_time
     future_status = {key: info["exists"] for key, info in future_sources.items()}
     return data, future_data, future_status, future_sources, messages, load_time, source_mtime
+
+
+@st.cache_data(show_spinner=False)
+def build_live_leaderboard_payload(file_signature):
+    timings = {}
+
+    def mark_timing(label, start_time):
+        timings[label] = round(perf_counter() - start_time, 4)
+
+    step_start = perf_counter()
+    data, future_data, future_status, future_sources, load_messages, load_time, source_mtime = load_data(file_signature)
+    mark_timing("load_data", step_start)
+
+    team_season = data.get("team_season", pd.DataFrame())
+    team_game = data.get("team_game", pd.DataFrame())
+    historical_roster = data.get("historical_roster", pd.DataFrame())
+    season_rosters = data.get("season_rosters", {})
+    team_assets = data.get("team_assets", pd.DataFrame())
+
+    if team_season.empty:
+        return {
+            "leaderboard": pd.DataFrame(),
+            "selected_season": None,
+            "weekly_snapshot_key": "",
+            "weekly_snapshot_year": None,
+            "weekly_snapshot_period": "",
+            "roster_file": "No roster file found",
+            "production_found": False,
+            "future_status": future_status,
+            "future_sources": future_sources,
+            "load_messages": load_messages,
+            "load_time": load_time,
+            "source_mtime": source_mtime,
+            "projected_meta": {},
+            "has_snapshot": False,
+            "build_timings": timings,
+            "team_season_empty": True,
+        }
+
+    selected_season = int(get_latest_available_season(team_season, season_rosters))
+    schedule_sources = [
+        future_data.get("schedules", pd.DataFrame()),
+        data.get("games", pd.DataFrame()),
+    ]
+    schedule_frames = [df for df in schedule_sources if isinstance(df, pd.DataFrame) and not df.empty]
+    schedule_for_period = pd.concat(schedule_frames, ignore_index=True, sort=False) if schedule_frames else pd.DataFrame()
+    weekly_snapshot_key, weekly_snapshot_year, weekly_snapshot_period = current_nfl_period_key(
+        selected_season,
+        schedule_for_period,
+    )
+
+    step_start = perf_counter()
+    player_stats, production_found = roster_scoring.load_player_stats(future_data)
+    player_stats = roster_scoring.standardize_player_stats(player_stats)
+    performance_season = get_selected_performance_season(int(selected_season), team_season)
+    performance_all, _ = build_performance_scores(team_season)
+    performance_df, _ = build_performance_scores(team_season, performance_season)
+    team_universe = sorted(performance_df["team"].dropna().unique().tolist())
+    mark_timing("performance_scores", step_start)
+
+    step_start = perf_counter()
+    local_roster, roster_file, _ = roster_scoring.load_local_roster(int(selected_season), historical_roster, season_rosters)
+    transactions = roster_scoring.load_transaction_feed(future_data)
+    roster_context, _ = roster_scoring.build_roster_context(local_roster, future_data, int(selected_season))
+    selected_roster_scores = roster_scoring.calculate_team_roster_score(
+        roster_context,
+        int(selected_season),
+        team_universe,
+        historical_roster=historical_roster,
+        transactions=transactions,
+        player_stats=player_stats,
+    )
+    mark_timing("selected_roster_score", step_start)
+
+    step_start = perf_counter()
+    historical_roster_scores = []
+    if not historical_roster.empty and "season" in historical_roster.columns:
+        hist_season_values = pd.to_numeric(historical_roster["season"], errors="coerce")
+        hist_seasons = sorted(hist_season_values.dropna().astype(int).unique())
+        for roster_season in hist_seasons:
+            season_roster = historical_roster[hist_season_values == roster_season].copy()
+            teams_for_season = sorted(performance_all.loc[performance_all["season"] == roster_season, "team"].dropna().unique().tolist())
+            if teams_for_season:
+                season_scores = roster_scoring.calculate_team_roster_score(
+                    season_roster,
+                    int(roster_season),
+                    teams_for_season,
+                    historical_roster=historical_roster,
+                    transactions=pd.DataFrame(),
+                )
+                season_scores["season"] = int(roster_season)
+                historical_roster_scores.append(season_scores)
+    roster_scores_all = pd.concat(historical_roster_scores, ignore_index=True) if historical_roster_scores else pd.DataFrame()
+    mark_timing("historical_roster_scores", step_start)
+
+    step_start = perf_counter()
+    records = calculate_current_wins(team_game)
+    projected_wins, projected_meta = calculate_projected_wins(
+        performance_all,
+        records,
+        roster_scores_all,
+        selected_roster_scores,
+        performance_season,
+        int(selected_season),
+    )
+    mark_timing("projected_wins", step_start)
+
+    step_start = perf_counter()
+    quadrants = calculate_quadrant_probabilities(team_game, performance_season, team_universe)
+    mark_timing("quadrant_probabilities", step_start)
+
+    step_start = perf_counter()
+    leaderboard = merge_leaderboard_scores(performance_df, selected_roster_scores, projected_wins, quadrants, team_assets, int(selected_season))
+    record_columns = ["team", "current_wins", "current_losses", "current_ties"]
+    leaderboard = leaderboard.merge(
+        records[records["season"] == performance_season][record_columns],
+        on="team",
+        how="left",
+    )
+    previous_snapshot, has_snapshot = load_previous_snapshot()
+    leaderboard = calculate_rank_movement(leaderboard, previous_snapshot)
+    leaderboard["status_label"] = leaderboard.apply(generate_status_label, axis=1)
+    mark_timing("final_merge", step_start)
+
+    timings["total_payload_build"] = round(sum(timings.values()), 4)
+    print(f"Live Leaderboard payload build timings: {timings}")
+
+    return {
+        "leaderboard": leaderboard,
+        "selected_season": int(selected_season),
+        "weekly_snapshot_key": weekly_snapshot_key,
+        "weekly_snapshot_year": weekly_snapshot_year,
+        "weekly_snapshot_period": weekly_snapshot_period,
+        "roster_file": roster_file,
+        "production_found": production_found,
+        "future_status": future_status,
+        "future_sources": future_sources,
+        "load_messages": load_messages,
+        "load_time": load_time,
+        "source_mtime": source_mtime,
+        "projected_meta": projected_meta,
+        "has_snapshot": has_snapshot,
+        "build_timings": timings,
+        "team_season_empty": False,
+    }
 
 
 def is_nflreadpy_available():
@@ -583,7 +832,8 @@ def read_last_live_source_refresh_status():
 
 def refresh_live_sources_if_needed(selected_season):
     """
-    Attempts to refresh nflverse-backed live source CSVs once per ET hour window.
+    Legacy inline refresh helper retained for compatibility; the page now calls
+    the shared daily refresh pipeline imported above.
     If the app skips because it refreshed recently, it still shows the last known status.
     """
     if not should_refresh_live_sources():
@@ -666,12 +916,18 @@ def build_team_color_lookup(team_assets):
     return lookup
 
 
-def get_latest_available_season(team_season, roster_2026):
+def get_latest_available_season(team_season, season_rosters):
     seasons = []
     if not team_season.empty and "season" in team_season.columns:
         seasons.extend(pd.to_numeric(team_season["season"], errors="coerce").dropna().astype(int).tolist())
-    if not roster_2026.empty and "season" in roster_2026.columns:
-        seasons.extend(pd.to_numeric(roster_2026["season"], errors="coerce").dropna().astype(int).tolist())
+    if isinstance(season_rosters, dict):
+        seasons.extend(int(year) for year in season_rosters.keys() if str(year).isdigit())
+        for entry in season_rosters.values():
+            frame = entry.get("df", pd.DataFrame()) if isinstance(entry, dict) else entry
+            if isinstance(frame, pd.DataFrame) and not frame.empty and "season" in frame.columns:
+                seasons.extend(pd.to_numeric(frame["season"], errors="coerce").dropna().astype(int).tolist())
+    elif isinstance(season_rosters, pd.DataFrame) and not season_rosters.empty and "season" in season_rosters.columns:
+        seasons.extend(pd.to_numeric(season_rosters["season"], errors="coerce").dropna().astype(int).tolist())
     return max(seasons) if seasons else datetime.now().year
 
 
@@ -806,6 +1062,7 @@ def build_performance_scores(team_season, season=None):
     return output, source
 
 
+@st.cache_data(show_spinner=False)
 def calculate_current_wins(team_game):
     cols = ["season", "team", "current_wins", "current_losses", "current_ties", "scored_games"]
     if team_game.empty or not {"season", "team", "points_for", "points_against"}.issubset(team_game.columns):
@@ -829,16 +1086,8 @@ def calculate_current_wins(team_game):
     )
 
 
-def load_local_roster(selected_season, historical_roster, roster_2026):
-    if selected_season == 2026 and not roster_2026.empty:
-        return roster_2026.copy(), "roster_2026.csv", "Local roster file"
-    if not historical_roster.empty and "season" in historical_roster.columns:
-        hist = historical_roster.copy()
-        hist["season"] = pd.to_numeric(hist["season"], errors="coerce")
-        selected = hist[hist["season"] == selected_season].copy()
-        if not selected.empty:
-            return selected, "nfl_season_rosters_clean_2005_2025.csv", "Local roster file"
-    return pd.DataFrame(), "No roster file found", "Local roster file"
+def load_local_roster(selected_season, historical_roster, season_rosters):
+    return roster_scoring.load_local_roster(selected_season, historical_roster, season_rosters)
 
 
 def load_live_roster_feed():
@@ -1170,6 +1419,15 @@ def calculate_transaction_impact(team=None, transactions=None):
 
 @st.cache_data(show_spinner=False)
 def calculate_team_roster_score(roster, selected_season, team_universe, historical_roster=None, transactions=None, player_stats=None):
+    return roster_scoring.calculate_team_roster_score(
+        roster,
+        selected_season,
+        team_universe,
+        historical_roster=historical_roster,
+        transactions=transactions,
+        player_stats=player_stats,
+    )
+
     columns = [
         "team",
         "roster_score",
@@ -1257,6 +1515,7 @@ def calculate_projected_wins_score(projected_wins):
     return float(np.clip(50 + (pd.to_numeric(projected_wins, errors="coerce") / 17) * 50, 50, 100))
 
 
+@st.cache_data(show_spinner=False)
 def calculate_projected_wins(performance_all, records, roster_scores_all, selected_roster_scores, performance_season, selected_season):
     fallback_columns = ["team", "projected_wins", "projected_wins_low", "projected_wins_high", "projected_wins_range", "projected_wins_score"]
     selected_features = performance_all[performance_all["season"] == performance_season].copy()
@@ -1517,6 +1776,7 @@ def calculate_quadrant_probability_score(row):
     return float(np.clip(row["q1_probability"] * 60 + row["q2_probability"] * 75 + row["q3_probability"] * 88 + row["q4_probability"] * 100, 50, 100))
 
 
+@st.cache_data(show_spinner=False)
 def calculate_quadrant_probabilities(team_game, performance_season, team_universe):
     inputs = calculate_super_square_inputs(team_game)
     if inputs.empty:
@@ -1617,22 +1877,61 @@ def calculate_rank_movement(leaderboard, previous_snapshot):
     output["previous_score"] = pd.to_numeric(output["previous_score"], errors="coerce").fillna(output["live_market_score"])
     output["rank_change"] = pd.to_numeric(output["previous_rank"], errors="coerce") - pd.to_numeric(output["live_rank"], errors="coerce")
     output["score_change"] = pd.to_numeric(output["live_market_score"], errors="coerce") - pd.to_numeric(output["previous_score"], errors="coerce")
-    output["movement_arrow"] = np.select([output["rank_change"] > 0, output["rank_change"] < 0], ["\u2191", "\u2193"], default="\u2192")
+    output["movement_arrow"] = np.select(
+        [
+            output["rank_change"] > 0,
+            output["rank_change"] < 0,
+            output["score_change"] > 0.05,
+            output["score_change"] < -0.05,
+        ],
+        ["\u2191", "\u2193", "\u2191", "\u2193"],
+        default="\u2192",
+    )
     return output
 
 
+def should_save_daily_snapshot():
+    current_time = now_et()
+    latest_due = latest_daily_reload_due_time(current_time)
+    if current_time - latest_due > timedelta(hours=1):
+        return False
+
+    snapshot, has_snapshot = load_previous_snapshot()
+
+    if not has_snapshot:
+        return True
+
+    snapshot_day = latest_due.date().isoformat()
+    if "snapshot_day" in snapshot.columns and snapshot["snapshot_day"].astype(str).eq(snapshot_day).any():
+        return False
+
+    if "snapshot_timestamp" in snapshot.columns:
+        timestamps = pd.to_datetime(snapshot["snapshot_timestamp"], errors="coerce", utc=True)
+        if timestamps.notna().any():
+            latest_snapshot_time = timestamps.max().to_pydatetime().astimezone(ET)
+            if latest_snapshot_time >= latest_due:
+                return False
+
+    return True
+
+
 def save_live_snapshot(leaderboard, period_key):
+    if not should_save_daily_snapshot():
+        return False
+
     snapshot = leaderboard.copy()
     snapshot["snapshot_timestamp"] = now_et().isoformat()
+    snapshot["snapshot_day"] = daily_snapshot_key()
     snapshot["snapshot_week"] = period_key
 
-    live_columns = ["snapshot_week"] + SNAPSHOT_COLUMNS
+    live_columns = ["snapshot_day", "snapshot_week"] + SNAPSHOT_COLUMNS
     for column in live_columns:
         if column not in snapshot.columns:
             snapshot[column] = pd.NA
 
     SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
     snapshot[live_columns].to_csv(SNAPSHOT_PATH, index=False)
+    return True
 
 
 def first_matching_column(df, candidates):
@@ -1655,6 +1954,37 @@ def current_calendar_week_cutoff(moment):
     monday = moment.date() - timedelta(days=moment.weekday())
     cutoff_day = monday + timedelta(days=WEEKLY_SNAPSHOT_CUTOFF_WEEKDAY)
     return snapshot_cutoff_at(cutoff_day)
+
+
+def weekly_snapshot_window_key(cutoff):
+    return coerce_et(cutoff).isoformat()
+
+
+def weekly_snapshot_already_saved(history, week_key, save_cutoff):
+    if history.empty:
+        return False
+
+    window_key = weekly_snapshot_window_key(save_cutoff)
+
+    if "snapshot_window" in history.columns and history["snapshot_window"].astype(str).eq(window_key).any():
+        return True
+
+    if "snapshot_timestamp" in history.columns:
+        timestamps = pd.to_datetime(history["snapshot_timestamp"], errors="coerce", utc=True)
+        window_start = save_cutoff.astimezone(timezone.utc)
+        window_end = (save_cutoff + timedelta(days=7)).astimezone(timezone.utc)
+        in_window = (timestamps >= window_start) & (timestamps < window_end)
+
+        if "snapshot_week" in history.columns:
+            in_window = in_window & history["snapshot_week"].astype(str).eq(str(week_key))
+
+        if in_window.any():
+            return True
+
+    if "snapshot_week" in history.columns:
+        return history["snapshot_week"].astype(str).eq(str(week_key)).any()
+
+    return False
 
 
 def next_weekly_snapshot_cutoff(start_date):
@@ -1687,7 +2017,7 @@ def snapshot_period_sort_key(value):
         return (int(year), 0, "0000-00-00")
 
     # New weekly offseason format:
-    # 2026-Offseason-2026-06-01
+    # YYYY-Offseason-YYYY-MM-DD
     if len(parts) == 5 and parts[1].lower() == "offseason":
         year = pd.to_numeric(parts[0], errors="coerce")
         cutoff_date = "-".join(parts[2:5])
@@ -1698,7 +2028,7 @@ def snapshot_period_sort_key(value):
         return (int(year), 0, cutoff_date)
 
     # Regular season format:
-    # 2026-Week-01
+    # YYYY-Week-WW
     if len(parts) == 3 and parts[1].lower() == "week":
         year = pd.to_numeric(parts[0], errors="coerce")
         week = pd.to_numeric(parts[2], errors="coerce")
@@ -1863,16 +2193,18 @@ def should_save_weekly_snapshot(week_key):
     if snapshot_period_sort_key(week_key) is None:
         return False
 
-    history, has_history = load_weekly_history()
-
-    if has_history and "snapshot_week" in history.columns:
-        already_saved = history["snapshot_week"].astype(str).eq(week_key).any()
-        if already_saved:
-            return False
-
     current_time = now_et()
     save_cutoff = WEEKLY_SNAPSHOT_CUTOFFS.get(str(week_key), current_calendar_week_cutoff(current_time))
-    return current_time >= save_cutoff
+
+    if current_time < save_cutoff:
+        return False
+
+    history, has_history = load_weekly_history()
+
+    if has_history and weekly_snapshot_already_saved(history, week_key, save_cutoff):
+        return False
+
+    return True
 
 
 def save_weekly_snapshot_if_needed(leaderboard, week_key):
@@ -1880,16 +2212,17 @@ def save_weekly_snapshot_if_needed(leaderboard, week_key):
         return False, week_key
 
     history, has_history = load_weekly_history()
-    if has_history and "snapshot_week" in history.columns:
-        already_saved = history["snapshot_week"].astype(str).eq(week_key).any()
-        if already_saved:
-            return False, week_key
+    save_cutoff = WEEKLY_SNAPSHOT_CUTOFFS.get(str(week_key), current_calendar_week_cutoff(now_et()))
+
+    if has_history and weekly_snapshot_already_saved(history, week_key, save_cutoff):
+        return False, week_key
 
     snapshot = leaderboard.copy()
     snapshot["snapshot_timestamp"] = now_et().isoformat()
+    snapshot["snapshot_window"] = weekly_snapshot_window_key(save_cutoff)
     snapshot["snapshot_week"] = week_key
 
-    weekly_columns = ["snapshot_week"] + SNAPSHOT_COLUMNS
+    weekly_columns = ["snapshot_window", "snapshot_week"] + SNAPSHOT_COLUMNS
 
     for column in weekly_columns:
         if column not in snapshot.columns:
@@ -1931,11 +2264,11 @@ def generate_movement_reason(row, has_snapshot):
     rank_change = pd.to_numeric(row.get("rank_change"), errors="coerce")
     score_change = pd.to_numeric(row.get("score_change"), errors="coerce")
     if pd.notna(rank_change) and rank_change < 0:
-        return "Current profile slipped versus last refresh"
+        return "Current profile slipped versus the daily snapshot"
     if pd.notna(rank_change) and rank_change == 0 and (pd.isna(score_change) or abs(score_change) < 0.05):
-        return "No rank movement since last refresh"
+        return "No rank movement since the daily snapshot"
     if pd.notna(score_change) and score_change < 0:
-        return "Live score softened since last refresh"
+        return "Live score softened since the daily snapshot"
     if row.get("roster_score", 0) >= 82:
         return "Roster score lifted profile"
     if row.get("current_gini_score", 0) >= 106:
@@ -1944,13 +2277,13 @@ def generate_movement_reason(row, has_snapshot):
         return "Projected wins improved"
     if row.get("most_likely_quadrant") in {"Q3 - Playoff Contenders", "Q4 - Super Bowl Contenders"}:
         return "Moved closer to a stronger quadrant profile"
-    return "Current profile improved versus last refresh"
+    return "Current profile improved versus the daily snapshot"
 
 
 def render_live_status_strip(selected_season, weekly_snapshot_period, static_time, leaderboard):
     fallback = format_et_timestamp(static_time, include_seconds=True)
     fallback_dt = static_time.replace(tzinfo=ET) if static_time.tzinfo is None else static_time.astimezone(ET)
-    next_refresh_fallback_dt = fallback_dt.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    next_refresh_fallback_dt = next_daily_reload_time(fallback_dt)
     next_refresh_fallback = next_refresh_fallback_dt.strftime("%I:%M %p").lstrip("0") + " ET"
 
     best = leaderboard.sort_values("live_rank", ascending=True).iloc[0]
@@ -2467,7 +2800,7 @@ html, body {{
             </div>
 
             <div class="headline-card" style="{card_style(riser)}">
-                <div class="headline-label">Riser of Week</div>
+                <div class="headline-label">Riser of Day</div>
                 <div class="headline-logo-wrap">{logo_html(riser["team"], riser.get("team_logo", ""), "headline-logo")}</div>
                 <div class="headline-team">{escape(riser["team_name"])}</div>
                 <div class="movement-indicator movement-up">
@@ -2478,7 +2811,7 @@ html, body {{
             </div>
 
             <div class="headline-card" style="{card_style(faller)}">
-                <div class="headline-label">Faller of Week</div>
+                <div class="headline-label">Faller of Day</div>
                 <div class="headline-logo-wrap">{logo_html(faller["team"], faller.get("team_logo", ""), "headline-logo")}</div>
                 <div class="headline-team">{escape(faller["team_name"])}</div>
                 <div class="movement-indicator movement-down">
@@ -2532,11 +2865,7 @@ html, body {{
         return parts;
       }}, {{}});
 
-      const easternHour = Number(easternParts.hour);
-      const nextRefreshHour = ((easternHour % 24) + 1) % 24;
-      const nextRefreshHourLabel = nextRefreshHour % 12 || 12;
-      const nextRefreshPeriod = nextRefreshHour < 12 ? "AM" : "PM";
-      const refreshText = nextRefreshHourLabel + ":00 " + nextRefreshPeriod;
+      const refreshText = "11:59 PM";
 
       clockTarget.textContent = dateText + " | " + timeText + " ET";
       refreshTarget.textContent = "Next Refresh: " + refreshText + " ET";
@@ -2553,33 +2882,6 @@ html, body {{
 """,
         height=375,
         scrolling=False,
-    )
-
-
-def render_data_refresh_note(load_time, source_mtime, roster_file, performance_season, selected_season, production_found):
-    refresh_time = format_et_timestamp(load_time, include_seconds=False).split(" | ")[1]
-
-    if selected_season != performance_season:
-        perf_note = (
-            f"{selected_season} uses {performance_season} performance data "
-            "until current-season outcomes are available."
-        )
-    else:
-        perf_note = f"{selected_season} is using its own performance data."
-
-    roster_badge = "Player production active" if production_found else "Roster proxy active"
-
-    st.markdown(
-        f"""
-<div class="refresh-note">
-    <div>
-        <span>Data Refresh</span>
-        Refreshed from local files at {escape(refresh_time)} · {escape(perf_note)}
-    </div>
-    <div class="refresh-badge">{escape(roster_badge)}</div>
-</div>
-""",
-        unsafe_allow_html=True,
     )
 
 
@@ -2711,7 +3013,7 @@ def render_roster_tracker_plan(
         st.markdown(
             f"""
 <div class="tracker-plan">
-<p><b>Roster source:</b> Local 2026 roster file with refreshed nflverse support files</p>
+<p><b>Roster source:</b> Selected local roster file with refreshed nflverse support files</p>
 <p><b>Selected roster file name:</b> {escape(roster_file)}</p>
 <p><b>Last loaded time:</b> {escape(format_et_timestamp(load_time))}</p>
 <p><b>Live source refresh status:</b> {"Updated files this run" if live_source_refresh_ok else "Skipped or no new files this run"}</p>
@@ -2723,7 +3025,7 @@ def render_roster_tracker_plan(
 <p><b>Contracts file found:</b> {"Yes" if future_status.get("contracts") else "No"}</p>
 <p><b>Depth charts file found:</b> {"Yes" if future_status.get("depth_charts") else "No"}</p>
 <p><b>Snapshot file exists:</b> {"Yes" if snapshot_exists else "No"}</p>
-<p>This page uses the local roster file plus cached player production and injury data when available. The leaderboard auto-refreshes every 5 minutes and rereads the latest local files. Future transaction data can add cuts, trades, signings, and activations into the roster score.</p>
+<p>This page uses the local roster file plus cached player production and injury data when available. The leaderboard reloads once daily at 11:59 PM ET and rereads the latest local files. Future transaction data can add cuts, trades, signings, and activations into the roster score.</p>
 </div>
 """,
             unsafe_allow_html=True,
@@ -2781,7 +3083,7 @@ def render_free_data_source_plan(selected_season, nflreadpy_available):
             unsafe_allow_html=True,
         )
         if st.button("Refresh Local nflverse Cache", key="refresh_nflverse_cache", use_container_width=True):
-            ok, message, saved_files = update_local_data_from_nflverse([int(selected_season)])
+            ok, message = run_live_source_refresh_if_needed(int(selected_season), force=True)
             if ok:
                 st.success(message)
                 st.cache_data.clear()
@@ -2836,8 +3138,6 @@ def render_css():
 .hero-copy{{max-width:920px;color:rgba(255,255,255,.86);font-size:1.02rem;line-height:1.66;}}
 .market-pills{{display:flex;flex-wrap:wrap;gap:.55rem;margin-top:1rem;}}
 .market-pills span{{display:inline-flex;align-items:center;min-height:30px;padding:.4rem .72rem;border-radius:999px;background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.22);color:rgba(255,255,255,.88);font-size:.82rem;font-weight:850;}}
-.refresh-note{{margin:.75rem 0 1rem;padding:.85rem 1rem;border-radius:14px;background:rgba(255,255,255,.86);border:1px solid rgba(15,23,42,.10);border-left:5px solid {PRIMARY};box-shadow:0 10px 24px rgba(15,23,42,.055);color:#334155;font-size:.9rem;line-height:1.55;}}
-.refresh-note span{{color:{TEXT};font-weight:950;margin-right:.5rem;}}
 .current-season-card{{
     min-height:62px;
     display:flex;
@@ -2865,27 +3165,6 @@ def render_css():
     color:{TEXT};
     font-size:1rem;
     font-weight:950;
-}}
-.refresh-badge{{
-    display:inline-flex;
-    width:fit-content;
-    margin-top:.55rem;
-    padding:.28rem .62rem;
-    border-radius:999px;
-    background:rgba(241,90,36,.10);
-    border:1px solid rgba(241,90,36,.22);
-    color:{PRIMARY};
-    font-size:.78rem;
-    line-height:1;
-    font-weight:950;
-}}
-
-.refresh-subnote{{
-    margin-top:.45rem;
-    color:#475569;
-    font-size:.84rem;
-    line-height:1.45;
-    font-weight:700;
 }}
 .section-heading{{color:{TEXT};font-size:1.32rem;font-weight:950;margin:1.1rem 0 .7rem;}}
 .section-heading:after{{content:"";display:block;width:58px;height:4px;border-radius:999px;margin-top:.45rem;background:linear-gradient(90deg,{PRIMARY},{SECONDARY});}}
@@ -2954,7 +3233,7 @@ def render_css():
 }}
 .live-page{{
     max-width:1520px;
-    margin:-2.9rem auto 0;
+    margin:-3.35rem auto 0;
     padding:0 1rem 2.5rem;
 }}
 
@@ -3075,53 +3354,15 @@ def render_css():
     font-weight:800;
 }}
 
-.refresh-note{{
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    gap:1rem;
-    margin:.65rem 0 .9rem;
-    padding:.72rem .9rem;
-    border-radius:14px;
-    background:rgba(255,255,255,.86);
-    border:1px solid rgba(15,23,42,.10);
-    border-left:5px solid {PRIMARY};
-    box-shadow:0 10px 24px rgba(15,23,42,.05);
-    color:#334155;
-    font-size:.86rem;
-    line-height:1.35;
-}}
-
-.refresh-note span{{
-    color:{TEXT};
-    font-weight:950;
-    margin-right:.4rem;
-}}
-
-.refresh-badge{{
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    min-height:24px;
-    padding:0 12px;
-    border-radius:999px;
-    background:rgba(241,90,36,.10);
-    border:1px solid rgba(241,90,36,.24);
-    color:{PRIMARY};
-    font-size:.75rem;
-    font-weight:950;
-    white-space:nowrap;
-}}
 div[data-testid="stSelectbox"] label p{{color:{TEXT}!important;font-size:.94rem!important;font-weight:900!important;}}div[data-testid="stSelectbox"] [data-baseweb="select"]>div{{background-color:white!important;border:1px solid #D1D5DB!important;border-radius:10px!important;box-shadow:0 6px 16px rgba(15,23,42,.045)!important;}}
 @media(max-width:1100px){{.leader-row{{grid-template-columns:44px minmax(190px,1fr) 92px 74px 74px 74px;}}.quad-cell,.move-cell,.status-pill{{grid-column:span 2;}}.detail-grid{{grid-template-columns:repeat(2,minmax(0,1fr));}}}}
 @media(max-width:780px){{
-    .live-page{{margin:-0.75rem auto 0;padding:0 .25rem 2rem;}}
+    .live-page{{margin:-1.05rem auto 0;padding:0 .25rem 2rem;}}
     .leader-hero{{padding:1.25rem 1rem;border-radius:16px 16px 0 0;}}
     .hero-title{{font-size:clamp(1.85rem,10vw,2.45rem);}}
     .hero-copy{{font-size:.9rem;}}
     .market-pills .live-time-pill{{width:100%;white-space:normal;text-align:center;line-height:1.25;padding:.65rem .85rem;}}
     .current-season-left{{gap:1rem;flex-wrap:wrap;}}
-    .refresh-note{{flex-direction:column;align-items:flex-start;}}
     .leader-row{{grid-template-columns:42px minmax(0,1fr);gap:.55rem;border-radius:14px;}}
     .team-name{{white-space:normal;}}
     .score-cell,.mini-cell,.quad-cell,.move-cell,.status-pill{{grid-column:2;}}
@@ -3136,102 +3377,61 @@ div[data-testid="stSelectbox"] label p{{color:{TEXT}!important;font-size:.94rem!
 
 render_css()
 render_top_nav("Live Leaderboard", PRIMARY, SECONDARY)
+schedule_daily_page_reload()
 
 # Keep the page stable while the user is viewing it.
-# The live clock updates inside the header without forcing a full browser reload.
-# Data sources refresh when the page is opened or when the user manually refreshes below.
+# The live clock updates inside the header, and the page reruns once daily at 11:59 PM ET.
+# Data sources refresh when the daily window is due or when the user manually refreshes below.
 
-initial_data, _, _, _, _, _, _ = load_data()
+file_signature = live_leaderboard_file_signature()
+initial_data, _, _, _, _, _, _ = load_data(file_signature)
 initial_team_season = initial_data.get("team_season", pd.DataFrame())
-initial_roster_2026 = initial_data.get("roster_2026", pd.DataFrame())
+initial_season_rosters = initial_data.get("season_rosters", {})
 
 live_source_refresh_ok = False
 live_source_refresh_message = "Live source refresh was not attempted yet."
 
 if not initial_team_season.empty:
-    initial_selected_season = int(get_latest_available_season(initial_team_season, initial_roster_2026))
-    live_source_refresh_ok, live_source_refresh_message = refresh_live_sources_if_needed(initial_selected_season)
+    initial_selected_season = int(get_latest_available_season(initial_team_season, initial_season_rosters))
+    live_source_refresh_ok, live_source_refresh_message = run_live_source_refresh_if_needed(initial_selected_season)
+    if live_source_refresh_ok:
+        st.cache_data.clear()
+        file_signature = live_leaderboard_file_signature()
 
-data, future_data, future_status, future_sources, load_messages, load_time, source_mtime = load_data()
-team_season = data["team_season"]
-team_game = data["team_game"]
-historical_roster = data["historical_roster"]
-roster_2026 = data["roster_2026"]
-team_assets = data["team_assets"]
-player_stats, production_found = load_player_stats(future_data)
-player_stats = standardize_player_stats(player_stats)
+payload = build_live_leaderboard_payload(file_signature)
+print(f"Live Leaderboard payload timings (cached or rebuilt): {payload.get('build_timings', {})}")
+
+leaderboard = payload["leaderboard"]
+selected_season = payload["selected_season"]
+weekly_snapshot_key = payload["weekly_snapshot_key"]
+weekly_snapshot_period = payload["weekly_snapshot_period"]
+roster_file = payload["roster_file"]
+production_found = payload["production_found"]
+future_status = payload["future_status"]
+future_sources = payload["future_sources"]
+load_messages = payload["load_messages"]
+load_time = payload["load_time"]
+source_mtime = payload["source_mtime"]
+projected_meta = payload["projected_meta"]
+has_snapshot = payload["has_snapshot"]
 nflreadpy_available = is_nflreadpy_available()
 
 for message in load_messages:
     st.warning(message)
 
-if team_season.empty:
+if payload.get("team_season_empty") or leaderboard.empty:
     st.error("Live Leaderboard needs team_season_estat.csv to build the Gini foundation.")
     st.stop()
 
-available_seasons = set(pd.to_numeric(team_season["season"], errors="coerce").dropna().astype(int).unique())
-if not roster_2026.empty and "season" in roster_2026.columns:
-    available_seasons.update(pd.to_numeric(roster_2026["season"], errors="coerce").dropna().astype(int).unique())
-
-# Live Leaderboard is current-moment only.
-# It automatically uses the latest available leaderboard season.
-selected_season = int(get_latest_available_season(team_season, roster_2026))
-
-schedule_sources = [
-    future_data.get("schedules", pd.DataFrame()),
-    data.get("games", pd.DataFrame()),
-]
-schedule_frames = [df for df in schedule_sources if isinstance(df, pd.DataFrame) and not df.empty]
-schedule_for_period = pd.concat(schedule_frames, ignore_index=True, sort=False) if schedule_frames else pd.DataFrame()
-weekly_snapshot_key, weekly_snapshot_year, weekly_snapshot_period = current_nfl_period_key(
-    selected_season,
-    schedule_for_period,
-)
-
 st.markdown('<div class="live-page">', unsafe_allow_html=True)
 
-performance_season = get_selected_performance_season(int(selected_season), team_season)
-performance_all, gini_source = build_performance_scores(team_season)
-performance_df, _ = build_performance_scores(team_season, performance_season)
-team_universe = sorted(performance_df["team"].dropna().unique().tolist())
+if live_source_refresh_ok:
+    record_model_recalculation(
+        "Live Leaderboard",
+        "Streamlit cache was cleared and leaderboard/team roster scores were recalculated from the refreshed live source CSVs.",
+    )
 
-local_roster, roster_file, roster_source = load_local_roster(int(selected_season), historical_roster, roster_2026)
-transactions = load_transaction_feed(future_data)
-selected_roster_scores = calculate_team_roster_score(
-    merge_live_roster_updates(local_roster, load_live_roster_feed()),
-    int(selected_season),
-    team_universe,
-    historical_roster=historical_roster,
-    transactions=transactions,
-    player_stats=player_stats,
-)
-
-historical_roster_scores = []
-if not historical_roster.empty and "season" in historical_roster.columns:
-    hist_seasons = sorted(pd.to_numeric(historical_roster["season"], errors="coerce").dropna().astype(int).unique())
-    for roster_season in hist_seasons:
-        season_roster = historical_roster[pd.to_numeric(historical_roster["season"], errors="coerce") == roster_season].copy()
-        teams_for_season = sorted(performance_all.loc[performance_all["season"] == roster_season, "team"].dropna().unique().tolist())
-        if teams_for_season:
-            season_scores = calculate_team_roster_score(season_roster, int(roster_season), teams_for_season, historical_roster=historical_roster, transactions=pd.DataFrame())
-            season_scores["season"] = int(roster_season)
-            historical_roster_scores.append(season_scores)
-roster_scores_all = pd.concat(historical_roster_scores, ignore_index=True) if historical_roster_scores else pd.DataFrame()
-
-records = calculate_current_wins(team_game)
-projected_wins, projected_meta = calculate_projected_wins(performance_all, records, roster_scores_all, selected_roster_scores, performance_season, int(selected_season))
-quadrants = calculate_quadrant_probabilities(team_game, performance_season, team_universe)
-leaderboard = merge_leaderboard_scores(performance_df, selected_roster_scores, projected_wins, quadrants, team_assets, int(selected_season))
-record_columns = ["team", "current_wins", "current_losses", "current_ties"]
-
-leaderboard = leaderboard.merge(
-    records[records["season"] == performance_season][record_columns],
-    on="team",
-    how="left",
-)
-previous_snapshot, has_snapshot = load_previous_snapshot()
-leaderboard = calculate_rank_movement(leaderboard, previous_snapshot)
-leaderboard["status_label"] = leaderboard.apply(generate_status_label, axis=1)
+render_start = perf_counter()
 
 render_live_status_strip(
     selected_season,
@@ -3244,17 +3444,8 @@ weekly_snapshot_saved, weekly_snapshot_key = save_weekly_snapshot_if_needed(lead
 save_live_snapshot(leaderboard, weekly_snapshot_key)
 
 # Keep technical data-source details out of the public top section.
-# They are shown later in the bottom "Free Live Data Source Plan" expander.
+# They are shown later in the bottom details expander.
 # render_source_status_card(nflreadpy_available, future_sources, roster_file, production_found)
-
-render_data_refresh_note(
-    load_time,
-    source_mtime,
-    roster_file,
-    performance_season,
-    int(selected_season),
-    production_found,
-)
 
 render_leaderboard(leaderboard)
 render_biggest_movers(leaderboard, has_snapshot)
@@ -3271,3 +3462,4 @@ render_roster_tracker_plan(
 )
 # render_free_data_source_plan(performance_season, nflreadpy_available)
 st.markdown("</div>", unsafe_allow_html=True)
+print(f"Live Leaderboard render timing: {round(perf_counter() - render_start, 4)}s")
