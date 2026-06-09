@@ -109,6 +109,14 @@ LIVE_SOURCE_CACHE_FILES = {
     "teams": LIVE_SOURCES_DIR / "teams.csv",
 }
 
+LEADERBOARD_CACHE_SIGNATURE_EXCLUDED_PATHS = {
+    SNAPSHOT_PATH,
+    WEEKLY_HISTORY_PATH,
+    LIVE_SOURCE_REFRESH_LOG_PATH,
+    LIVE_SOURCE_REFRESH_STATUS_PATH,
+    LIVE_SOURCES_DIR / "predictive_model_projection_debug.json",
+}
+
 SUPER_BOWL_WINNERS = {
     2005: "PIT",
     2006: "IND",
@@ -356,12 +364,16 @@ def live_leaderboard_source_paths():
     paths.extend(roster_scoring.season_roster_source_paths(DATA_DIR))
     paths.extend(LIVE_SOURCE_CACHE_FILES.values())
     paths.extend(leaderboard_future_fallback_files().values())
-    paths.append(SNAPSHOT_PATH)
 
     unique_paths = []
     seen = set()
+    excluded = {str(Path(path).resolve(strict=False)).lower() for path in LEADERBOARD_CACHE_SIGNATURE_EXCLUDED_PATHS}
     for path in paths:
         path = Path(path)
+        resolved = str(path.resolve(strict=False)).lower()
+        name = path.name.lower()
+        if resolved in excluded or "debug" in name or "timing" in name:
+            continue
         key = str(path).lower()
         if key not in seen:
             seen.add(key)
@@ -516,9 +528,6 @@ def build_live_leaderboard_payload(file_signature):
         on="team",
         how="left",
     )
-    previous_snapshot, has_snapshot = load_previous_snapshot()
-    leaderboard = calculate_rank_movement(leaderboard, previous_snapshot)
-    leaderboard["status_label"] = leaderboard.apply(generate_status_label, axis=1)
     mark_timing("final_merge", step_start)
 
     timings["total_payload_build"] = round(sum(timings.values()), 4)
@@ -538,7 +547,7 @@ def build_live_leaderboard_payload(file_signature):
         "load_time": load_time,
         "source_mtime": source_mtime,
         "projected_meta": projected_meta,
-        "has_snapshot": has_snapshot,
+        "has_snapshot": False,
         "build_timings": timings,
         "team_season_empty": False,
     }
@@ -834,37 +843,10 @@ def refresh_live_sources_if_needed(selected_season):
     """
     Legacy inline refresh helper retained for compatibility; the page now calls
     the shared daily refresh pipeline imported above.
-    If the app skips because it refreshed recently, it still shows the last known status.
+    Keep this delegate so any future local call still respects the 11:59 PM ET
+    daily window instead of the old page-open/hourly refresh behavior.
     """
-    if not should_refresh_live_sources():
-        last_ok, last_message = read_last_live_source_refresh_status()
-
-        if last_message == "No previous live source refresh status found.":
-            return False, "Skipped because live sources refreshed recently. CSV files appear to be using the latest local cache."
-
-        return last_ok, f"Skipped because live sources refreshed recently. Previous result: {last_message}"
-
-    selected_season = int(selected_season)
-    nflverse_season = get_nflverse_source_season(selected_season)
-
-    ok, message, saved_files = update_local_data_from_nflverse([nflverse_season])
-
-    if ok:
-        full_message = (
-            f"Live sources refreshed using nflverse season {nflverse_season}. "
-            f"Dashboard season remains {selected_season}. {message}"
-        )
-        mark_live_sources_refreshed(ok=True, message=full_message)
-        st.cache_data.clear()
-        return True, full_message
-
-    full_message = (
-        f"Live source refresh attempted using nflverse season {nflverse_season}, "
-        f"but no cacheable files were updated. Dashboard season remains {selected_season}. "
-        f"{message}"
-    )
-    mark_live_sources_refreshed(ok=False, message=full_message)
-    return False, full_message
+    return run_live_source_refresh_if_needed(selected_season)
 
 def normalize_team(team):
     value = "" if pd.isna(team) else str(team).strip().upper()
@@ -1854,40 +1836,61 @@ def load_previous_snapshot():
     return snapshot, not snapshot.empty
 
 
-def calculate_rank_movement(leaderboard, previous_snapshot):
+def _set_neutral_weekly_movement(output):
+    output["previous_week_rank"] = output.get("live_rank", 0)
+    output["previous_week_score"] = output.get("live_market_score", 0.0)
+    output["weekly_rank_change"] = 0
+    output["weekly_score_change"] = 0.0
+    output["weekly_movement_arrow"] = "\u2192"
+    output["previous_rank"] = output["previous_week_rank"]
+    output["previous_score"] = output["previous_week_score"]
+    output["rank_change"] = output["weekly_rank_change"]
+    output["score_change"] = output["weekly_score_change"]
+    output["movement_arrow"] = output["weekly_movement_arrow"]
+    return output
+
+
+def calculate_weekly_movement(leaderboard, weekly_snapshot):
     output = leaderboard.copy()
-    if previous_snapshot.empty or not {"season", "team", "live_rank", "live_market_score"}.issubset(previous_snapshot.columns):
-        output["previous_rank"] = output["live_rank"]
-        output["previous_score"] = output["live_market_score"]
-        output["rank_change"] = 0
-        output["score_change"] = 0.0
-        output["movement_arrow"] = "\u2192"
-        return output
-    previous = previous_snapshot[previous_snapshot["season"] == output["season"].iloc[0]].copy()
+    required = {"season", "team", "live_rank", "live_market_score"}
+    if output.empty or weekly_snapshot.empty or not required.issubset(weekly_snapshot.columns):
+        return _set_neutral_weekly_movement(output)
+
+    previous = weekly_snapshot[weekly_snapshot["season"] == output["season"].iloc[0]].copy()
     if previous.empty:
-        output["previous_rank"] = output["live_rank"]
-        output["previous_score"] = output["live_market_score"]
-        output["rank_change"] = 0
-        output["score_change"] = 0.0
-        output["movement_arrow"] = "\u2192"
-        return output
-    previous = previous[["team", "live_rank", "live_market_score"]].rename(columns={"live_rank": "previous_rank", "live_market_score": "previous_score"})
+        return _set_neutral_weekly_movement(output)
+
+    previous = previous[["team", "live_rank", "live_market_score"]].rename(
+        columns={
+            "live_rank": "previous_week_rank",
+            "live_market_score": "previous_week_score",
+        }
+    )
     output = output.merge(previous, on="team", how="left")
-    output["previous_rank"] = pd.to_numeric(output["previous_rank"], errors="coerce").fillna(output["live_rank"])
-    output["previous_score"] = pd.to_numeric(output["previous_score"], errors="coerce").fillna(output["live_market_score"])
-    output["rank_change"] = pd.to_numeric(output["previous_rank"], errors="coerce") - pd.to_numeric(output["live_rank"], errors="coerce")
-    output["score_change"] = pd.to_numeric(output["live_market_score"], errors="coerce") - pd.to_numeric(output["previous_score"], errors="coerce")
-    output["movement_arrow"] = np.select(
+    output["previous_week_rank"] = pd.to_numeric(output["previous_week_rank"], errors="coerce").fillna(output["live_rank"])
+    output["previous_week_score"] = pd.to_numeric(output["previous_week_score"], errors="coerce").fillna(output["live_market_score"])
+    output["weekly_rank_change"] = pd.to_numeric(output["previous_week_rank"], errors="coerce") - pd.to_numeric(output["live_rank"], errors="coerce")
+    output["weekly_score_change"] = pd.to_numeric(output["live_market_score"], errors="coerce") - pd.to_numeric(output["previous_week_score"], errors="coerce")
+    output["weekly_movement_arrow"] = np.select(
         [
-            output["rank_change"] > 0,
-            output["rank_change"] < 0,
-            output["score_change"] > 0.05,
-            output["score_change"] < -0.05,
+            output["weekly_rank_change"] > 0,
+            output["weekly_rank_change"] < 0,
+            output["weekly_score_change"] > 0.05,
+            output["weekly_score_change"] < -0.05,
         ],
         ["\u2191", "\u2193", "\u2191", "\u2193"],
         default="\u2192",
     )
+    output["previous_rank"] = output["previous_week_rank"]
+    output["previous_score"] = output["previous_week_score"]
+    output["rank_change"] = output["weekly_rank_change"]
+    output["score_change"] = output["weekly_score_change"]
+    output["movement_arrow"] = output["weekly_movement_arrow"]
     return output
+
+
+def calculate_rank_movement(leaderboard, previous_snapshot):
+    return calculate_weekly_movement(leaderboard, previous_snapshot)
 
 
 def should_save_daily_snapshot():
@@ -2009,12 +2012,27 @@ def snapshot_period_sort_key(value):
     text = str(value).strip()
     parts = text.split("-")
 
+    # Legacy calendar-week format, e.g. 2026-W22.
+    if len(parts) == 2 and parts[1].lower().startswith("w"):
+        year = pd.to_numeric(parts[0], errors="coerce")
+        week = pd.to_numeric(parts[1][1:], errors="coerce")
+
+        if pd.isna(year) or pd.isna(week):
+            return None
+
+        try:
+            week_start = datetime.fromisocalendar(int(year), int(week), 1).date().isoformat()
+        except ValueError:
+            week_start = f"{int(week):02d}"
+
+        return (int(year), 0, 0, week_start)
+
     # Old offseason format, if it already exists in your CSV.
     if len(parts) == 2 and parts[1].lower() == "offseason":
         year = pd.to_numeric(parts[0], errors="coerce")
         if pd.isna(year):
             return None
-        return (int(year), 0, "0000-00-00")
+        return (int(year), 0, 0, "0000-00-00")
 
     # New weekly offseason format:
     # YYYY-Offseason-YYYY-MM-DD
@@ -2025,7 +2043,18 @@ def snapshot_period_sort_key(value):
         if pd.isna(year):
             return None
 
-        return (int(year), 0, cutoff_date)
+        return (int(year), 0, 0, cutoff_date)
+
+    # Preseason format:
+    # YYYY-Preseason-Week-WW
+    if len(parts) == 4 and parts[1].lower() == "preseason" and parts[2].lower() == "week":
+        year = pd.to_numeric(parts[0], errors="coerce")
+        week = pd.to_numeric(parts[3], errors="coerce")
+
+        if pd.isna(year) or pd.isna(week):
+            return None
+
+        return (int(year), 1, int(week), "0000-00-00")
 
     # Regular season format:
     # YYYY-Week-WW
@@ -2036,7 +2065,26 @@ def snapshot_period_sort_key(value):
         if pd.isna(year) or pd.isna(week):
             return None
 
-        return (int(year), int(week), "9999-99-99")
+        return (int(year), 2, int(week), "0000-00-00")
+
+    # Playoff formats generated by current_nfl_period_key:
+    # YYYY-Wild-Card-Week, YYYY-Divisional-Week, YYYY-Conference-Championship, YYYY-Super-Bowl
+    if len(parts) >= 2:
+        year = pd.to_numeric(parts[0], errors="coerce")
+        if not pd.isna(year):
+            playoff_label = "-".join(parts[1:]).lower()
+            playoff_order = {
+                "wild-card-week": 1,
+                "divisional-week": 2,
+                "conference-championship": 3,
+                "super-bowl": 4,
+            }
+            if playoff_label.startswith("playoff-week-"):
+                week = pd.to_numeric(playoff_label.replace("playoff-week-", ""), errors="coerce")
+                if not pd.isna(week):
+                    return (int(year), 3, int(week), "0000-00-00")
+            if playoff_label in playoff_order:
+                return (int(year), 3, playoff_order[playoff_label], "0000-00-00")
 
     return None
 
@@ -2162,7 +2210,7 @@ def load_weekly_history():
     return history, not history.empty
 
 
-def get_latest_prior_week_snapshot(current_week):
+def get_latest_weekly_movement_snapshot(current_week):
     history, has_history = load_weekly_history()
 
     if not has_history or "snapshot_week" not in history.columns:
@@ -2175,16 +2223,27 @@ def get_latest_prior_week_snapshot(current_week):
     history = history.copy()
     history["_snapshot_sort_key"] = history["snapshot_week"].apply(snapshot_period_sort_key)
     history = history[history["_snapshot_sort_key"].notna()].copy()
-    prior = history[history["_snapshot_sort_key"].apply(lambda sort_key: sort_key < current_sort_key)].copy()
+    candidates = history[history["_snapshot_sort_key"].apply(lambda sort_key: sort_key <= current_sort_key)].copy()
 
-    if prior.empty:
+    if candidates.empty:
         return pd.DataFrame(), False
 
-    latest_sort_key = max(prior["_snapshot_sort_key"])
-    latest_snapshot = prior[prior["_snapshot_sort_key"].apply(lambda sort_key: sort_key == latest_sort_key)].copy()
+    latest_sort_key = max(candidates["_snapshot_sort_key"])
+    latest_snapshot = candidates[candidates["_snapshot_sort_key"].apply(lambda sort_key: sort_key == latest_sort_key)].copy()
+
+    if "snapshot_timestamp" in latest_snapshot.columns:
+        timestamps = pd.to_datetime(latest_snapshot["snapshot_timestamp"], errors="coerce", utc=True)
+        if timestamps.notna().any():
+            latest_timestamp = timestamps.max()
+            latest_snapshot = latest_snapshot[timestamps.eq(latest_timestamp)].copy()
+
     latest_snapshot = latest_snapshot.drop(columns=["_snapshot_sort_key"], errors="ignore")
 
     return latest_snapshot, not latest_snapshot.empty
+
+
+def get_latest_prior_week_snapshot(current_week):
+    return get_latest_weekly_movement_snapshot(current_week)
 
 
 def should_save_weekly_snapshot(week_key):
@@ -2264,11 +2323,11 @@ def generate_movement_reason(row, has_snapshot):
     rank_change = pd.to_numeric(row.get("rank_change"), errors="coerce")
     score_change = pd.to_numeric(row.get("score_change"), errors="coerce")
     if pd.notna(rank_change) and rank_change < 0:
-        return "Current profile slipped versus the daily snapshot"
+        return "Current profile slipped versus the weekly baseline"
     if pd.notna(rank_change) and rank_change == 0 and (pd.isna(score_change) or abs(score_change) < 0.05):
-        return "No rank movement since the daily snapshot"
+        return "No rank movement since the weekly baseline"
     if pd.notna(score_change) and score_change < 0:
-        return "Live score softened since the daily snapshot"
+        return "Live score softened since the weekly baseline"
     if row.get("roster_score", 0) >= 82:
         return "Roster score lifted profile"
     if row.get("current_gini_score", 0) >= 106:
@@ -2277,7 +2336,7 @@ def generate_movement_reason(row, has_snapshot):
         return "Projected wins improved"
     if row.get("most_likely_quadrant") in {"Q3 - Playoff Contenders", "Q4 - Super Bowl Contenders"}:
         return "Moved closer to a stronger quadrant profile"
-    return "Current profile improved versus the daily snapshot"
+    return "Current profile improved versus the weekly baseline"
 
 
 def render_live_status_strip(selected_season, weekly_snapshot_period, static_time, leaderboard):
@@ -2758,7 +2817,7 @@ html, body {{
     <div class="hero-section">
         <div class="hero-kicker">Live Team Market</div>
         <div class="hero-title">Live Leaderboard</div>
-        <div class="hero-copy">A current-moment ranking of every NFL team using Gini performance, roster strength, projected wins, Super Square profile, and live refresh movement.</div>
+        <div class="hero-copy">A current-moment ranking of every NFL team using Gini performance, roster strength, projected wins, Super Square profile, and weekly movement.</div>
     </div>
 
     <div class="section-divider"></div>
@@ -2800,7 +2859,7 @@ html, body {{
             </div>
 
             <div class="headline-card" style="{card_style(riser)}">
-                <div class="headline-label">Riser of Day</div>
+                <div class="headline-label">Riser of Week</div>
                 <div class="headline-logo-wrap">{logo_html(riser["team"], riser.get("team_logo", ""), "headline-logo")}</div>
                 <div class="headline-team">{escape(riser["team_name"])}</div>
                 <div class="movement-indicator movement-up">
@@ -2811,7 +2870,7 @@ html, body {{
             </div>
 
             <div class="headline-card" style="{card_style(faller)}">
-                <div class="headline-label">Faller of Day</div>
+                <div class="headline-label">Faller of Week</div>
                 <div class="headline-logo-wrap">{logo_html(faller["team"], faller.get("team_logo", ""), "headline-logo")}</div>
                 <div class="headline-team">{escape(faller["team_name"])}</div>
                 <div class="movement-indicator movement-down">
@@ -2937,7 +2996,7 @@ def render_biggest_movers(leaderboard, has_snapshot):
         fallers = leaderboard.tail(3)
     riser_html = "".join(mover_card(row, generate_movement_reason(row, has_snapshot)) for _, row in risers.iterrows())
     faller_html = "".join(mover_card(row, generate_movement_reason(row, has_snapshot)) for _, row in fallers.iterrows())
-    st.markdown(f'<div class="movers-grid"><div class="market-card"><div class="card-title">Biggest Risers</div>{riser_html}</div><div class="market-card"><div class="card-title">Biggest Fallers</div>{faller_html}</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="movers-grid"><div class="market-card"><div class="card-title">Biggest Weekly Risers</div>{riser_html}</div><div class="market-card"><div class="card-title">Biggest Weekly Fallers</div>{faller_html}</div></div>', unsafe_allow_html=True)
 
 
 def roster_strengths(row):
@@ -3000,6 +3059,134 @@ def render_team_detail(leaderboard, production_found):
     )
 
 
+def extract_refresh_message_field(message, label):
+    if not message or label not in message:
+        return ""
+
+    tail = str(message).split(label, 1)[1].strip()
+    stop_labels = [
+        " Daily refresh window:",
+        " Next scheduled window:",
+        " Last successful refresh:",
+        " Last attempt:",
+        " Previous result:",
+    ]
+    stop_positions = [tail.find(stop_label) for stop_label in stop_labels if tail.find(stop_label) > 0]
+    if stop_positions:
+        tail = tail[: min(stop_positions)].strip()
+    return tail.rstrip(".").strip()
+
+
+def parse_refresh_display_time(value):
+    if not value:
+        return None
+
+    parsed = parse_et_timestamp(value)
+    if parsed is not None:
+        return parsed
+
+    text = str(value).strip()
+    if text.lower() in {"none recorded", "not recorded", "unknown"}:
+        return None
+
+    for suffix in (" ET", "ET"):
+        if text.endswith(suffix):
+            text = text[: -len(suffix)].strip()
+            break
+
+    for fmt in ("%Y-%m-%d %I:%M %p", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=ET)
+        except ValueError:
+            pass
+
+    return None
+
+
+def format_refresh_display_time(value):
+    parsed = parse_refresh_display_time(value)
+    if parsed is None:
+        return "Not recorded"
+    return format_et_timestamp(parsed, include_seconds=False)
+
+
+def summarize_refresh_reason(message, status):
+    text = str(message or status.get("reason", "") or "").strip()
+    lower = text.lower()
+
+    if "already fresh" in lower or "are fresh for the" in lower:
+        return "Live source CSVs are already fresh for the latest daily window."
+    if "already attempted" in lower:
+        return "Refresh already ran or was attempted for the latest daily window."
+    if "manual refresh forced" in lower:
+        return "Manual refresh was requested."
+    if "no previous successful" in lower:
+        return "No previous successful refresh was recorded."
+    if "no cacheable files were updated" in lower:
+        return "Refresh ran, but no cacheable source files were updated."
+    if "nflreadpy could not be imported" in lower:
+        return "Refresh could not run because nflreadpy is unavailable."
+    if status.get("reason"):
+        return str(status.get("reason"))
+    return text or "Refresh status unavailable."
+
+
+def refresh_detail_rows(live_source_refresh_ok, live_source_refresh_message):
+    status = read_live_source_refresh_status()
+    message = str(live_source_refresh_message or status.get("message", "") or "")
+
+    action = "Not attempted"
+    lower_message = message.lower()
+    if lower_message.startswith("skipped") or "skipped live source refresh" in lower_message:
+        action = "Skipped"
+    elif live_source_refresh_ok:
+        action = "Refreshed"
+    elif "failed" in lower_message or "no cacheable files were updated" in lower_message:
+        action = "Failed"
+
+    latest_window = (
+        extract_refresh_message_field(message, "Daily refresh window:")
+        or status.get("daily_refresh_window_label")
+        or status.get("daily_refresh_due_time")
+        or ""
+    )
+    next_window = (
+        extract_refresh_message_field(message, "Next scheduled window:")
+        or status.get("next_daily_refresh_due_time")
+        or ""
+    )
+    last_success = (
+        extract_refresh_message_field(message, "Last successful refresh:")
+        or status.get("last_successful_refresh_time")
+        or ""
+    )
+    last_attempt = (
+        extract_refresh_message_field(message, "Last attempt:")
+        or status.get("refresh_time")
+        or ""
+    )
+
+    rows = [
+        ("Refresh Status", action),
+        ("Reason", summarize_refresh_reason(message, status)),
+        ("Latest Window", format_refresh_display_time(latest_window)),
+        ("Next Window", format_refresh_display_time(next_window)),
+        ("Last Successful Refresh", format_refresh_display_time(last_success)),
+        ("Last Attempt", format_refresh_display_time(last_attempt)),
+    ]
+
+    technical = {
+        "display_message": message,
+        "status_file_message": status.get("message", ""),
+        "status_reason": status.get("reason", ""),
+        "refresh_time": status.get("refresh_time", ""),
+        "last_successful_refresh_time": status.get("last_successful_refresh_time", ""),
+        "daily_refresh_window_label": status.get("daily_refresh_window_label", ""),
+        "next_daily_refresh_due_time": status.get("next_daily_refresh_due_time", ""),
+    }
+    return rows, technical
+
+
 def render_roster_tracker_plan(
     roster_file,
     load_time,
@@ -3009,28 +3196,70 @@ def render_roster_tracker_plan(
     live_source_refresh_ok=False,
     live_source_refresh_message="Live source refresh status unavailable.",
 ):
-    with st.expander("Roster + Data Source Details", expanded=False):
-        st.markdown(
-            f"""
-<div class="tracker-plan">
-<p><b>Roster source:</b> Selected local roster file with refreshed nflverse support files</p>
-<p><b>Selected roster file name:</b> {escape(roster_file)}</p>
-<p><b>Last loaded time:</b> {escape(format_et_timestamp(load_time))}</p>
-<p><b>Live source refresh status:</b> {"Updated files this run" if live_source_refresh_ok else "Skipped or no new files this run"}</p>
-<p><b>Live source refresh message:</b> {escape(live_source_refresh_message)}</p>
-<p><b>Player production stats found:</b> {"Yes" if production_found else "No"}</p>
-<p><b>Injuries file found:</b> {"Yes" if future_status.get("injuries") else "No"}</p>
-<p><b>Transactions file found:</b> {"Yes" if future_status.get("transactions") else "No"}</p>
-<p><b>Draft picks file found:</b> {"Yes" if future_status.get("draft_picks") else "No"}</p>
-<p><b>Contracts file found:</b> {"Yes" if future_status.get("contracts") else "No"}</p>
-<p><b>Depth charts file found:</b> {"Yes" if future_status.get("depth_charts") else "No"}</p>
-<p><b>Snapshot file exists:</b> {"Yes" if snapshot_exists else "No"}</p>
-<p>This page uses the local roster file plus cached player production and injury data when available. The leaderboard reloads once daily at 11:59 PM ET and rereads the latest local files. Future transaction data can add cuts, trades, signings, and activations into the roster score.</p>
-</div>
-""",
-            unsafe_allow_html=True,
-        )
+    refresh_rows, technical_refresh = refresh_detail_rows(
+        live_source_refresh_ok,
+        live_source_refresh_message,
+    )
 
+    refresh_rows_html = "".join(
+        [
+            (
+                '<div class="refresh-detail-row">'
+                f'<div class="refresh-detail-label">{escape(label)}</div>'
+                f'<div class="refresh-detail-value">{escape(value)}</div>'
+                '</div>'
+            )
+            for label, value in refresh_rows
+        ]
+    )
+
+    source_rows = [
+        ("Player production", "Yes" if production_found else "No"),
+        ("Injuries", "Yes" if future_status.get("injuries") else "No"),
+        ("Draft picks", "Yes" if future_status.get("draft_picks") else "No"),
+        ("Contracts", "Yes" if future_status.get("contracts") else "No"),
+        ("Depth charts", "Yes" if future_status.get("depth_charts") else "No"),
+        ("Snapshot file", "Yes" if snapshot_exists else "No"),
+    ]
+
+    source_rows_html = "".join(
+        [
+            (
+                '<div class="source-found-row">'
+                f'<span>{escape(label)}</span>'
+                f'<b class="{"source-found-yes" if value == "Yes" else "source-found-no"}">{escape(value)}</b>'
+                '</div>'
+            )
+            for label, value in source_rows
+        ]
+    )
+
+    roster_file_display = Path(str(roster_file)).name if roster_file else "No roster file found"
+
+    refresh_card_html = (
+        '<div class="tracker-plan">'
+        '<div class="refresh-detail-card">'
+        '<div class="refresh-card-title">Live Source Refresh</div>'
+        f'<div class="refresh-detail-grid">{refresh_rows_html}</div>'
+        '<div class="refresh-short-note">Unattended refreshes need an external scheduler while Streamlit is closed.</div>'
+        '</div>'
+        '</div>'
+    )
+
+    source_card_html = (
+        '<div class="source-files-card">'
+        '<div>'
+        '<div class="refresh-card-title">Source Files Found</div>'
+        f'<div class="refresh-card-subtitle">Roster source: {escape(roster_file_display)}</div>'
+        f'<div class="refresh-card-subtitle">Last loaded: {escape(format_et_timestamp(load_time, include_seconds=False))}</div>'
+        '</div>'
+        f'<div class="source-found-grid">{source_rows_html}</div>'
+        '</div>'
+    )
+
+    with st.expander("Roster + Data Source Details", expanded=False):
+        st.markdown(refresh_card_html, unsafe_allow_html=True)
+        st.markdown(source_card_html, unsafe_allow_html=True)
 
 def render_source_status_card(nflreadpy_available, future_sources, roster_file, production_found):
     source_text = "nflreadpy available." if nflreadpy_available else "nflreadpy not installed. Using local CSV files."
@@ -3194,6 +3423,131 @@ def render_css():
 .detail-grid{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.58rem;margin-top:1rem;}}.detail-metric{{min-height:68px;padding:.68rem .72rem;border-radius:12px;background:rgba(248,250,252,.92);border:1px solid rgba(15,23,42,.08);}}.detail-metric span{{display:block;color:{MUTED};font-size:.72rem;font-weight:900;line-height:1.2;}}.detail-metric b{{display:block;color:{TEXT};font-size:1.12rem;line-height:1.2;font-weight:950;margin-top:.25rem;}}
 .prob-row{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.55rem;margin-top:.85rem;}}.prob-row div{{padding:.65rem;border-radius:12px;background:linear-gradient(135deg,rgba(7,17,31,.92),rgba(0,115,183,.76));color:white;}}.prob-row b,.prob-row span{{display:block;}}.prob-row b{{font-size:.78rem;font-weight:950;}}.prob-row span{{font-size:1.2rem;font-weight:950;margin-top:.18rem;}}
 .plain-explain{{margin-top:.9rem;color:#334155;font-size:.93rem;line-height:1.62;font-weight:700;}}.muted-explain{{color:{MUTED};font-weight:650;}}.tracker-plan p{{color:#334155;font-size:.94rem;line-height:1.6;margin:0 0 .55rem;}}
+.refresh-detail-card,.source-files-card{{
+    margin:.8rem 0 1rem;
+    padding:1rem;
+    border-radius:16px;
+    background:rgba(255,255,255,.90);
+    border:1px solid rgba(15,23,42,.10);
+    border-left:5px solid {PRIMARY};
+    box-shadow:0 12px 28px rgba(15,23,42,.06);
+    backdrop-filter:blur(14px);
+}}
+.source-files-card{{
+    display:grid;
+    grid-template-columns:minmax(220px,.45fr) minmax(0,1fr);
+    gap:1rem;
+    border-left-color:{SECONDARY};
+}}
+.refresh-card-title{{
+    color:{TEXT};
+    font-size:1rem;
+    font-weight:950;
+    margin-bottom:.7rem;
+}}
+.refresh-card-subtitle{{
+    color:#475569;
+    font-size:.82rem;
+    line-height:1.35;
+    font-weight:800;
+    margin:.18rem 0;
+}}
+.refresh-detail-grid{{
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:.55rem;
+}}
+.refresh-detail-row,.source-found-row{{
+    min-height:58px;
+    padding:.66rem .72rem;
+    border-radius:12px;
+    background:rgba(248,250,252,.92);
+    border:1px solid rgba(15,23,42,.08);
+}}
+.refresh-detail-label{{
+    color:{MUTED};
+    font-size:.70rem;
+    font-weight:950;
+    text-transform:uppercase;
+    letter-spacing:.07em;
+    margin-bottom:.18rem;
+}}
+.refresh-detail-value{{
+    color:{TEXT};
+    font-size:.92rem;
+    line-height:1.35;
+    font-weight:900;
+}}
+.refresh-short-note{{
+    margin-top:.72rem;
+    color:#475569;
+    font-size:.82rem;
+    font-weight:800;
+}}
+.source-found-grid{{
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:.5rem;
+}}
+.source-found-row{{
+    min-height:42px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:.7rem;
+}}
+.source-found-row span{{
+    color:#334155;
+    font-size:.86rem;
+    font-weight:850;
+}}
+.source-found-row b{{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    min-width:44px;
+    min-height:24px;
+    border-radius:999px;
+    font-size:.74rem;
+    font-weight:950;
+}}
+.source-found-yes{{
+    color:#166534;
+    background:rgba(22,101,52,.10);
+    border:1px solid rgba(22,101,52,.18);
+}}
+.source-found-no{{
+    color:#991B1B;
+    background:rgba(153,27,27,.09);
+    border:1px solid rgba(153,27,27,.16);
+}}
+.technical-refresh-log{{
+    margin:.25rem 0 1rem;
+    border-radius:14px;
+    border:1px solid rgba(15,23,42,.10);
+    background:rgba(255,255,255,.78);
+    overflow:hidden;
+}}
+.technical-refresh-log summary{{
+    cursor:pointer;
+    padding:.72rem .86rem;
+    color:{TEXT};
+    font-size:.88rem;
+    font-weight:950;
+}}
+.technical-refresh-log pre{{
+    margin:0;
+    padding:.8rem .9rem;
+    max-height:220px;
+    overflow:auto;
+    white-space:pre-wrap;
+    word-break:break-word;
+    border-top:1px solid rgba(15,23,42,.08);
+    background:#F8FAFC;
+    color:#334155;
+    font-size:.76rem;
+    line-height:1.45;
+}}
 .source-status-card{{display:grid;grid-template-columns:minmax(260px,.55fr) minmax(0,1fr);gap:1rem;align-items:start;margin:.8rem 0 1rem;padding:1rem;border-radius:16px;background:rgba(255,255,255,.90);border:1px solid rgba(15,23,42,.10);border-left:5px solid {SECONDARY};box-shadow:0 12px 28px rgba(15,23,42,.06);}}
 .source-status-title{{color:{MUTED};font-size:.74rem;font-weight:950;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.25rem;}}
 .source-status-main{{color:{TEXT};font-size:1.05rem;font-weight:950;line-height:1.2;}}
@@ -3366,7 +3720,7 @@ div[data-testid="stSelectbox"] label p{{color:{TEXT}!important;font-size:.94rem!
     .leader-row{{grid-template-columns:42px minmax(0,1fr);gap:.55rem;border-radius:14px;}}
     .team-name{{white-space:normal;}}
     .score-cell,.mini-cell,.quad-cell,.move-cell,.status-pill{{grid-column:2;}}
-    .movers-grid,.detail-grid,.prob-row,.source-status-card{{grid-template-columns:1fr;}}
+    .movers-grid,.detail-grid,.prob-row,.source-status-card,.source-files-card,.refresh-detail-grid,.source-found-grid{{grid-template-columns:1fr;}}
     .source-file-list{{justify-content:flex-start;}}
 }}
 </style>
@@ -3381,7 +3735,10 @@ schedule_daily_page_reload()
 
 # Keep the page stable while the user is viewing it.
 # The live clock updates inside the header, and the page reruns once daily at 11:59 PM ET.
-# Data sources refresh when the daily window is due or when the user manually refreshes below.
+# Streamlit can only run this scheduled rerun while the app process is awake; if the app is
+# closed, use update_live_sources.py from GitHub Actions, cron, Task Scheduler, or another
+# external scheduler to perform the same schedule-gated source refresh without opening the page.
+# Data sources refresh only when the daily window is due/missed or when the user manually forces refresh below.
 
 file_signature = live_leaderboard_file_signature()
 initial_data, _, _, _, _, _, _ = load_data(file_signature)
@@ -3423,6 +3780,12 @@ if payload.get("team_season_empty") or leaderboard.empty:
     st.error("Live Leaderboard needs team_season_estat.csv to build the Gini foundation.")
     st.stop()
 
+weekly_snapshot_saved, weekly_snapshot_key = save_weekly_snapshot_if_needed(leaderboard, weekly_snapshot_key)
+weekly_movement_snapshot, has_snapshot = get_latest_weekly_movement_snapshot(weekly_snapshot_key)
+leaderboard = calculate_weekly_movement(leaderboard, weekly_movement_snapshot)
+leaderboard["status_label"] = leaderboard.apply(generate_status_label, axis=1)
+save_live_snapshot(leaderboard, weekly_snapshot_key)
+
 st.markdown('<div class="live-page">', unsafe_allow_html=True)
 
 if live_source_refresh_ok:
@@ -3439,9 +3802,6 @@ render_live_status_strip(
     load_time,
     leaderboard,
 )
-
-weekly_snapshot_saved, weekly_snapshot_key = save_weekly_snapshot_if_needed(leaderboard, weekly_snapshot_key)
-save_live_snapshot(leaderboard, weekly_snapshot_key)
 
 # Keep technical data-source details out of the public top section.
 # They are shown later in the bottom details expander.

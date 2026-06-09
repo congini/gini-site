@@ -118,6 +118,23 @@ def next_daily_refresh_time(moment=None):
     return today_due + timedelta(days=1)
 
 
+def format_refresh_window_time(dt):
+    dt = coerce_et(dt)
+    return dt.strftime("%Y-%m-%d %I:%M %p ET") if dt else "unknown"
+
+
+def live_source_refresh_window_context(reference_time=None):
+    reference_time = coerce_et(reference_time or now_et())
+    latest_due = latest_daily_refresh_due_time(reference_time)
+    return {
+        "reference_time": reference_time,
+        "latest_due": latest_due,
+        "latest_due_label": format_refresh_window_time(latest_due),
+        "next_due": next_daily_refresh_time(reference_time),
+        "next_due_label": format_refresh_window_time(next_daily_refresh_time(reference_time)),
+    }
+
+
 def get_live_source_file_state(reference_time=None, freshness_cutoff=None):
     reference_time = coerce_et(reference_time or now_et())
     freshness_cutoff = coerce_et(freshness_cutoff or latest_daily_refresh_due_time(reference_time))
@@ -188,15 +205,28 @@ def should_refresh_live_sources(force=False):
     latest_due = latest_daily_refresh_due_time(reference_time)
     file_state = get_live_source_file_state(reference_time, freshness_cutoff=latest_due)
     stale_keys = [key for key, info in file_state.items() if info["stale"]]
+    window_label = format_refresh_window_time(latest_due)
 
     if force:
-        return True, "Manual refresh forced.", file_state
+        return True, f"Manual refresh forced for the {window_label} daily window.", file_state
 
     status = read_live_source_refresh_status()
     last_success = read_last_successful_live_source_refresh()
 
-    if not stale_keys and last_success is not None and last_success >= latest_due:
-        return False, "All required live source CSV files are fresh for the latest 11:59 PM ET daily window.", file_state
+    if not stale_keys:
+        if last_success is not None and last_success >= latest_due:
+            return (
+                False,
+                f"All required live source CSV files are fresh for the {window_label} daily window; "
+                f"last successful refresh was {format_refresh_window_time(last_success)}.",
+                file_state,
+            )
+        return (
+            False,
+            f"All required live source CSV files are already fresh for the {window_label} daily window; "
+            "no additional page-open refresh is needed.",
+            file_state,
+        )
 
     last_attempt = read_last_live_source_refresh_attempt()
     attempted_by_current_pipeline = status.get("refresh_pipeline_version") == REFRESH_PIPELINE_VERSION
@@ -204,17 +234,23 @@ def should_refresh_live_sources(force=False):
     if attempted_by_current_pipeline and last_attempt is not None and last_attempt >= latest_due:
         return (
             False,
-            "Live source refresh already attempted for the latest 11:59 PM ET daily window.",
+            f"Live source refresh already attempted for the {window_label} daily window at "
+            f"{format_refresh_window_time(last_attempt)}.",
             file_state,
         )
 
     if last_success is None:
-        return True, "No previous successful live source refresh is recorded.", file_state
+        return True, f"No previous successful live source refresh is recorded for the {window_label} daily window.", file_state
 
     if last_success < latest_due:
-        return True, "Last successful live source refresh is before the latest 11:59 PM ET daily window.", file_state
+        return (
+            True,
+            f"Last successful live source refresh ({format_refresh_window_time(last_success)}) is before "
+            f"the {window_label} daily window.",
+            file_state,
+        )
 
-    return True, "At least one required live source CSV is stale or missing.", file_state
+    return True, f"At least one required live source CSV is stale or missing for the {window_label} daily window.", file_state
 
 
 def is_nflreadpy_available():
@@ -511,6 +547,7 @@ def update_local_data_from_nflverse(seasons=None, return_details=False):
 def mark_live_sources_refreshed(ok=False, message="", source_results=None, selected_season=None, reason=""):
     LIVE_SOURCES_DIR.mkdir(parents=True, exist_ok=True)
     refresh_time = now_et()
+    window_context = live_source_refresh_window_context(refresh_time)
     previous_success = read_last_successful_live_source_refresh()
     last_success = refresh_time if ok else previous_success
     source_results = source_results or {}
@@ -532,6 +569,11 @@ def mark_live_sources_refreshed(ok=False, message="", source_results=None, selec
         "complete": bool(ok and not required_failures),
         "updated_any": any(result.get("ok", False) for result in source_results.values()),
         "selected_season": int(selected_season) if selected_season is not None else None,
+        "attempted": True,
+        "skipped": False,
+        "daily_refresh_due_time": window_context["latest_due"].isoformat(),
+        "daily_refresh_window_label": window_context["latest_due_label"],
+        "next_daily_refresh_due_time": window_context["next_due"].isoformat(),
         "message": str(message),
         "reason": str(reason),
         "sources": source_results,
@@ -551,11 +593,17 @@ def read_last_live_source_refresh_status():
         message = status.get("message", "No refresh message found.")
         refresh_time = status.get("refresh_time", "")
         last_success = status.get("last_successful_refresh_time", "")
+        window_label = status.get("daily_refresh_window_label", "")
+        next_due = parse_et_timestamp(status.get("next_daily_refresh_due_time"))
 
         if refresh_time:
             detail = f"{message} Last attempt: {refresh_time}"
             if last_success:
                 detail += f" Last successful refresh: {last_success}"
+            if window_label:
+                detail += f" Daily refresh window: {window_label}"
+            if next_due:
+                detail += f" Next scheduled window: {format_refresh_window_time(next_due)}"
             return ok, detail
 
         return ok, message
@@ -584,12 +632,28 @@ def record_model_recalculation(page_name, message):
 def refresh_live_sources_if_needed(selected_season=None, force=False):
     selected_season = _coerce_selected_season(selected_season)
     should_refresh, reason, _ = should_refresh_live_sources(force=force)
+    window_context = live_source_refresh_window_context()
+
+    def status_tail():
+        last_success = read_last_successful_live_source_refresh()
+        last_attempt = read_last_live_source_refresh_attempt()
+        parts = [
+            f"Daily refresh window: {window_context['latest_due_label']}.",
+            f"Next scheduled window: {window_context['next_due_label']}.",
+        ]
+        if last_success is None:
+            parts.append("Last successful refresh: none recorded.")
+        else:
+            parts.append(f"Last successful refresh: {format_refresh_window_time(last_success)}.")
+        if last_attempt is not None:
+            parts.append(f"Last attempt: {format_refresh_window_time(last_attempt)}.")
+        return " ".join(parts)
 
     if not should_refresh:
         last_ok, last_message = read_last_live_source_refresh_status()
         if last_message == "No previous live source refresh status found.":
-            return False, f"Skipped live source refresh. {reason}"
-        return False, f"Skipped live source refresh. {reason} Previous result: {last_message}"
+            return False, f"Skipped live source refresh. {reason} {status_tail()}"
+        return False, f"Skipped live source refresh. {reason} {status_tail()} Previous result: {last_message}"
 
     updated_any, message, saved_files, source_results = update_local_data_from_nflverse(
         selected_season,
@@ -628,4 +692,4 @@ def refresh_live_sources_if_needed(selected_season=None, force=False):
         selected_season=selected_season,
         reason=reason,
     )
-    return updated_any, full_message
+    return updated_any, f"{full_message} {status_tail()}"

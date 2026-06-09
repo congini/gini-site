@@ -1,21 +1,26 @@
 {
   "refresh_pipeline_version": 2,
-  "refresh_time": "2026-06-08T07:11:29.653504-04:00",
-  "last_successful_refresh_time": "2026-06-08T07:11:29.653504-04:00",
+  "refresh_time": "2026-06-09T16:05:26.202222-04:00",
+  "last_successful_refresh_time": "2026-06-09T16:05:26.202222-04:00",
   "ok": true,
   "complete": true,
   "updated_any": true,
   "selected_season": 2026,
+  "attempted": true,
+  "skipped": false,
+  "daily_refresh_due_time": "2026-06-08T23:59:00-04:00",
+  "daily_refresh_window_label": "2026-06-08 11:59 PM ET",
+  "next_daily_refresh_due_time": "2026-06-09T23:59:00-04:00",
   "message": "Live sources refreshed for dashboard season 2026; nflreadpy source seasons used: 2025, 2026. Updated live source CSVs: weekly_rosters.csv, player_season_stats.csv, players.csv, snap_counts.csv, injuries.csv, draft_picks.csv, contracts.csv, depth_charts.csv, schedules.csv, teams.csv.",
-  "reason": "Last successful live source refresh is before the latest 11:59 PM ET daily window.",
+  "reason": "Manual refresh forced for the 2026-06-08 11:59 PM ET daily window.",
   "sources": {
     "weekly_rosters": {
       "ok": true,
       "file": "weekly_rosters.csv",
       "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\weekly_rosters.csv",
-      "rows": 2913,
+      "rows": 2912,
       "season": 2026,
-      "modified_time": "2026-06-08T07:11:10.734941-04:00",
+      "modified_time": "2026-06-09T16:05:08.020077-04:00",
       "error": "",
       "attempts": []
     },
@@ -25,7 +30,7 @@
       "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\player_season_stats.csv",
       "rows": 19421,
       "season": 2025,
-      "modified_time": "2026-06-08T07:11:12.316998-04:00",
+      "modified_time": "2026-06-09T16:05:10.328820-04:00",
       "error": "",
       "attempts": [
         {
@@ -39,9 +44,9 @@
       "ok": true,
       "file": "players.csv",
       "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\players.csv",
-      "rows": 25042,
+      "rows": 25043,
       "season": null,
-      "modified_time": "2026-06-08T07:11:12.912630-04:00",
+      "modified_time": "2026-06-09T16:05:11.351556-04:00",
       "error": "",
       "attempts": []
     },
@@ -51,7 +56,7 @@
       "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\snap_counts.csv",
       "rows": 26612,
       "season": 2025,
-      "modified_time": "2026-06-08T07:11:13.172016-04:00",
+      "modified_time": "2026-06-09T16:05:11.777880-04:00",
       "error": "",
       "attempts": [
         {
@@ -67,7 +72,7 @@
       "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\injuries.csv",
       "rows": 6068,
       "season": 2025,
-      "modified_time": "2026-06-08T07:11:13.230859-04:00",
+      "modified_time": "2026-06-09T16:05:12.003573-04:00",
       "error": "",
       "attempts": [
         {
@@ -83,7 +88,7 @@
       "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\draft_picks.csv",
       "rows": 257,
       "season": 2026,
-      "modified_time": "2026-06-08T07:11:13.246816-04:00",
+      "modified_time": "2026-06-09T16:05:12.268598-04:00",
       "error": "",
       "attempts": []
     },
@@ -91,9 +96,9 @@
       "ok": true,
       "file": "contracts.csv",
       "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\contracts.csv",
-      "rows": 51622,
+      "rows": 51623,
       "season": null,
-      "modified_time": "2026-06-08T07:11:28.055693-04:00",
+      "modified_time": "2026-06-09T16:05:23.782573-04:00",
       "error": "",
       "attempts": []
     },
@@ -101,9 +106,9 @@
       "ok": true,
       "file": "depth_charts.csv",
       "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\depth_charts.csv",
-      "rows": 217515,
+      "rows": 223798,
       "season": 2026,
-      "modified_time": "2026-06-08T07:11:29.590730-04:00",
+      "modified_time": "2026-06-09T16:05:25.823450-04:00",
       "error": "",
       "attempts": []
     },
@@ -113,7 +118,7 @@
       "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\schedules.csv",
       "rows": 272,
       "season": 2026,
-      "modified_time": "2026-06-08T07:11:29.637747-04:00",
+      "modified_time": "2026-06-09T16:05:26.058651-04:00",
       "error": "",
       "attempts": []
     },
@@ -123,7 +128,7 @@
       "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\teams.csv",
       "rows": 36,
       "season": null,
-      "modified_time": "2026-06-08T07:11:29.647118-04:00",
+      "modified_time": "2026-06-09T16:05:26.197459-04:00",
       "error": "",
       "attempts": []
     }
@@ -133,90 +138,90 @@
       "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\injuries.csv",
       "file": "injuries.csv",
       "exists": true,
-      "modified_time": "2026-06-08T07:11:13.230859-04:00",
-      "age_seconds": 16.422645,
-      "freshness_cutoff": "2026-06-07T23:59:00-04:00",
+      "modified_time": "2026-06-09T16:05:12.003573-04:00",
+      "age_seconds": 14.198649,
+      "freshness_cutoff": "2026-06-08T23:59:00-04:00",
       "stale": false
     },
     "player_snap_counts": {
       "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\snap_counts.csv",
       "file": "snap_counts.csv",
       "exists": true,
-      "modified_time": "2026-06-08T07:11:13.172016-04:00",
-      "age_seconds": 16.481488,
-      "freshness_cutoff": "2026-06-07T23:59:00-04:00",
+      "modified_time": "2026-06-09T16:05:11.777880-04:00",
+      "age_seconds": 14.424342,
+      "freshness_cutoff": "2026-06-08T23:59:00-04:00",
       "stale": false
     },
     "weekly_rosters": {
       "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\weekly_rosters.csv",
       "file": "weekly_rosters.csv",
       "exists": true,
-      "modified_time": "2026-06-08T07:11:10.734941-04:00",
-      "age_seconds": 18.918563,
-      "freshness_cutoff": "2026-06-07T23:59:00-04:00",
+      "modified_time": "2026-06-09T16:05:08.020077-04:00",
+      "age_seconds": 18.182145,
+      "freshness_cutoff": "2026-06-08T23:59:00-04:00",
       "stale": false
     },
     "player_season_stats": {
       "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\player_season_stats.csv",
       "file": "player_season_stats.csv",
       "exists": true,
-      "modified_time": "2026-06-08T07:11:12.316998-04:00",
-      "age_seconds": 17.336506,
-      "freshness_cutoff": "2026-06-07T23:59:00-04:00",
+      "modified_time": "2026-06-09T16:05:10.328820-04:00",
+      "age_seconds": 15.873402,
+      "freshness_cutoff": "2026-06-08T23:59:00-04:00",
       "stale": false
     },
     "schedules": {
       "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\schedules.csv",
       "file": "schedules.csv",
       "exists": true,
-      "modified_time": "2026-06-08T07:11:29.637747-04:00",
-      "age_seconds": 0.015757,
-      "freshness_cutoff": "2026-06-07T23:59:00-04:00",
+      "modified_time": "2026-06-09T16:05:26.058651-04:00",
+      "age_seconds": 0.143571,
+      "freshness_cutoff": "2026-06-08T23:59:00-04:00",
       "stale": false
     },
     "players": {
       "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\players.csv",
       "file": "players.csv",
       "exists": true,
-      "modified_time": "2026-06-08T07:11:12.912630-04:00",
-      "age_seconds": 16.740874,
-      "freshness_cutoff": "2026-06-07T23:59:00-04:00",
+      "modified_time": "2026-06-09T16:05:11.351556-04:00",
+      "age_seconds": 14.850666,
+      "freshness_cutoff": "2026-06-08T23:59:00-04:00",
       "stale": false
     },
     "teams": {
       "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\teams.csv",
       "file": "teams.csv",
       "exists": true,
-      "modified_time": "2026-06-08T07:11:29.647118-04:00",
-      "age_seconds": 0.006386,
-      "freshness_cutoff": "2026-06-07T23:59:00-04:00",
+      "modified_time": "2026-06-09T16:05:26.197459-04:00",
+      "age_seconds": 0.004763,
+      "freshness_cutoff": "2026-06-08T23:59:00-04:00",
       "stale": false
     },
     "contracts": {
       "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\contracts.csv",
       "file": "contracts.csv",
       "exists": true,
-      "modified_time": "2026-06-08T07:11:28.055693-04:00",
-      "age_seconds": 1.597811,
-      "freshness_cutoff": "2026-06-07T23:59:00-04:00",
+      "modified_time": "2026-06-09T16:05:23.782573-04:00",
+      "age_seconds": 2.419649,
+      "freshness_cutoff": "2026-06-08T23:59:00-04:00",
       "stale": false
     },
     "depth_charts": {
       "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\depth_charts.csv",
       "file": "depth_charts.csv",
       "exists": true,
-      "modified_time": "2026-06-08T07:11:29.590730-04:00",
-      "age_seconds": 0.062774,
-      "freshness_cutoff": "2026-06-07T23:59:00-04:00",
+      "modified_time": "2026-06-09T16:05:25.823450-04:00",
+      "age_seconds": 0.378772,
+      "freshness_cutoff": "2026-06-08T23:59:00-04:00",
       "stale": false
     },
     "draft_picks": {
       "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\draft_picks.csv",
       "file": "draft_picks.csv",
       "exists": true,
-      "modified_time": "2026-06-08T07:11:13.246816-04:00",
-      "age_seconds": 16.406688,
-      "freshness_cutoff": "2026-06-07T23:59:00-04:00",
+      "modified_time": "2026-06-09T16:05:12.268598-04:00",
+      "age_seconds": 13.933624,
+      "freshness_cutoff": "2026-06-08T23:59:00-04:00",
       "stale": false
     }
   }

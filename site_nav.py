@@ -357,13 +357,99 @@ div[data-testid="stPlotlyChart"] {{
     overflow: hidden;
 }}
 
+.stTabs {{
+    margin-top: 0.25rem;
+}}
+
 .stTabs [data-baseweb="tab-list"] {{
+    display: flex;
     flex-wrap: wrap;
-    row-gap: 0.35rem;
+    gap: 0.42rem;
+    row-gap: 0.42rem;
+    align-items: center;
+    width: 100%;
+    padding: 0.34rem;
+    border-radius: 16px;
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    background:
+        linear-gradient(135deg, rgba(255,255,255,0.94), rgba(255,255,255,0.76));
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.72),
+        0 12px 26px rgba(15, 23, 42, 0.075);
+    backdrop-filter: blur(14px) saturate(1.12);
+    -webkit-backdrop-filter: blur(14px) saturate(1.12);
 }}
 
 .stTabs [data-baseweb="tab"] {{
+    min-height: 42px;
+    flex: 1 1 160px;
+    justify-content: center;
     white-space: normal;
+    text-align: center;
+    border-radius: 12px;
+    border: 1px solid rgba(15, 23, 42, 0.10);
+    background: rgba(255,255,255,0.76);
+    color: #0F172A !important;
+    font-size: 0.92rem;
+    font-weight: 900;
+    line-height: 1.15;
+    padding: 0.62rem 0.82rem;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.70);
+    transition:
+        background 0.18s ease,
+        border-color 0.18s ease,
+        box-shadow 0.18s ease,
+        color 0.18s ease,
+        transform 0.18s ease;
+}}
+
+.stTabs [data-baseweb="tab"] p,
+.stTabs [data-baseweb="tab"] span {{
+    color: inherit !important;
+    font-weight: inherit !important;
+}}
+
+.stTabs [data-baseweb="tab"]:hover {{
+    border-color: {primary}88;
+    background: rgba(255,255,255,0.96);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.86),
+        0 8px 18px rgba(15, 23, 42, 0.08);
+    transform: translateY(-1px);
+}}
+
+.stTabs [aria-selected="true"] {{
+    border-color: transparent !important;
+    background: linear-gradient(135deg, {primary}, {secondary}) !important;
+    color: #FFFFFF !important;
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.24),
+        0 12px 24px {primary}36 !important;
+}}
+
+.stTabs [aria-selected="true"] p,
+.stTabs [aria-selected="true"] span {{
+    color: #FFFFFF !important;
+}}
+
+.stTabs [data-baseweb="tab-highlight"] {{
+    height: 0 !important;
+    background: transparent !important;
+}}
+
+@media (max-width: 700px) {{
+    .stTabs [data-baseweb="tab-list"] {{
+        gap: 0.34rem;
+        padding: 0.28rem;
+        border-radius: 14px;
+    }}
+
+    .stTabs [data-baseweb="tab"] {{
+        min-height: 38px;
+        flex-basis: calc(50% - 0.34rem);
+        padding: 0.52rem 0.56rem;
+        font-size: 0.82rem;
+    }}
 }}
 
 body .site-top-nav {{
