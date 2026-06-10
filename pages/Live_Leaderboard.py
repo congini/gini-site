@@ -11,11 +11,6 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
-try:
-    from streamlit_autorefresh import st_autorefresh
-    AUTOREFRESH_AVAILABLE = True
-except ImportError:
-    AUTOREFRESH_AVAILABLE = False
 
 try:
     from zoneinfo import ZoneInfo
@@ -34,14 +29,6 @@ try:
     SKLEARN_AVAILABLE = True
 except ImportError:
     SKLEARN_AVAILABLE = False
-
-
-st.set_page_config(
-    page_title="Live Leaderboard",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
 
 APP_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = APP_DIR / "data"
@@ -248,18 +235,28 @@ def milliseconds_until_next_daily_reload(moment=None):
     return max(1000, int(delay.total_seconds() * 1000))
 
 
-def schedule_daily_page_reload():
-    delay_ms = milliseconds_until_next_daily_reload()
-    if AUTOREFRESH_AVAILABLE:
-        st_autorefresh(interval=delay_ms, key="daily_1159_pm_reload")
-        return
+def schedule_daily_live_leaderboard_reload(hour=0, minute=5):
+    eastern = ZoneInfo("America/New_York") if ZoneInfo is not None else ET
+    moment = datetime.now(eastern)
+    next_reload = moment.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if moment >= next_reload:
+        next_reload += timedelta(days=1)
 
+    delay_ms = max(1000, int((next_reload - moment).total_seconds() * 1000))
+
+    # This reload only helps an open local browser pick up CSVs after the 11:59 PM scheduled refresh.
     components.html(
         f"""
 <script>
-window.setTimeout(function() {{
-  window.parent.location.reload();
-}}, {delay_ms});
+(function() {{
+  window.setTimeout(function() {{
+    try {{
+      window.parent.location.reload();
+    }} catch (error) {{
+      window.location.reload();
+    }}
+  }}, {delay_ms});
+}})();
 </script>
 """,
         height=0,
@@ -3731,11 +3728,11 @@ div[data-testid="stSelectbox"] label p{{color:{TEXT}!important;font-size:.94rem!
 
 render_css()
 render_top_nav("Live Leaderboard", PRIMARY, SECONDARY)
-schedule_daily_page_reload()
+schedule_daily_live_leaderboard_reload()
 
 # Keep the page stable while the user is viewing it.
-# The live clock updates inside the header, and the page reruns once daily at 11:59 PM ET.
-# Streamlit can only run this scheduled rerun while the app process is awake; if the app is
+# The live clock updates inside the header, and an open browser reloads once daily at 12:05 AM ET.
+# Streamlit can only run this browser timer while the app process is awake; if the app is
 # closed, use update_live_sources.py from GitHub Actions, cron, Task Scheduler, or another
 # external scheduler to perform the same schedule-gated source refresh without opening the page.
 # Data sources refresh only when the daily window is due/missed or when the user manually forces refresh below.
