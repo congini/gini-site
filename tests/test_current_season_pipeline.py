@@ -318,3 +318,14 @@ def test_weekly_roster_snapshots_are_deduplicated_and_departed_players_removed()
     standardized = live_roster_scoring.standardize_roster_columns(roster, 2026)
     assert standardized["gsis_id"].tolist() == ["p1"]
     assert standardized["week"].tolist() == [2]
+
+
+def test_deployed_tab_styling_is_version_tolerant_and_runtime_is_pinned():
+    root = Path(__file__).resolve().parents[1]
+    nav_source = (root / "site_nav.py").read_text(encoding="utf-8")
+    requirements = (root / "requirements.txt").read_text(encoding="utf-8").splitlines()
+
+    assert '.stTabs [role="tablist"]' in nav_source
+    assert '.stTabs [role="tab"]' in nav_source
+    assert 'div[data-testid="stTabs"] [role="tab"]' in nav_source
+    assert "streamlit==1.58.0" in requirements

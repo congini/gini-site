@@ -361,7 +361,10 @@ div[data-testid="stPlotlyChart"] {{
     margin-top: 0.25rem;
 }}
 
-.stTabs [data-baseweb="tab-list"] {{
+.stTabs [data-baseweb="tab-list"],
+.stTabs [role="tablist"],
+div[data-testid="stTabs"] [data-baseweb="tab-list"],
+div[data-testid="stTabs"] [role="tablist"] {{
     display: flex;
     flex-wrap: wrap;
     gap: 0.42rem;
@@ -380,7 +383,10 @@ div[data-testid="stPlotlyChart"] {{
     -webkit-backdrop-filter: blur(14px) saturate(1.12);
 }}
 
-.stTabs [data-baseweb="tab"] {{
+.stTabs [data-baseweb="tab"],
+.stTabs [role="tab"],
+div[data-testid="stTabs"] [data-baseweb="tab"],
+div[data-testid="stTabs"] [role="tab"] {{
     min-height: 42px;
     flex: 1 1 160px;
     justify-content: center;
@@ -404,12 +410,18 @@ div[data-testid="stPlotlyChart"] {{
 }}
 
 .stTabs [data-baseweb="tab"] p,
-.stTabs [data-baseweb="tab"] span {{
+.stTabs [data-baseweb="tab"] span,
+.stTabs [role="tab"] p,
+.stTabs [role="tab"] span,
+div[data-testid="stTabs"] [role="tab"] p,
+div[data-testid="stTabs"] [role="tab"] span {{
     color: inherit !important;
     font-weight: inherit !important;
 }}
 
-.stTabs [data-baseweb="tab"]:hover {{
+.stTabs [data-baseweb="tab"]:hover,
+.stTabs [role="tab"]:hover,
+div[data-testid="stTabs"] [role="tab"]:hover {{
     border-color: {primary}88;
     background: rgba(255,255,255,0.96);
     box-shadow:
@@ -418,7 +430,8 @@ div[data-testid="stPlotlyChart"] {{
     transform: translateY(-1px);
 }}
 
-.stTabs [aria-selected="true"] {{
+.stTabs [aria-selected="true"],
+div[data-testid="stTabs"] [role="tab"][aria-selected="true"] {{
     border-color: transparent !important;
     background: linear-gradient(135deg, {primary}, {secondary}) !important;
     color: #FFFFFF !important;
@@ -428,23 +441,30 @@ div[data-testid="stPlotlyChart"] {{
 }}
 
 .stTabs [aria-selected="true"] p,
-.stTabs [aria-selected="true"] span {{
+.stTabs [aria-selected="true"] span,
+div[data-testid="stTabs"] [role="tab"][aria-selected="true"] p,
+div[data-testid="stTabs"] [role="tab"][aria-selected="true"] span {{
     color: #FFFFFF !important;
 }}
 
-.stTabs [data-baseweb="tab-highlight"] {{
+.stTabs [data-baseweb="tab-highlight"],
+div[data-testid="stTabs"] [data-baseweb="tab-highlight"] {{
     height: 0 !important;
     background: transparent !important;
 }}
 
 @media (max-width: 700px) {{
-    .stTabs [data-baseweb="tab-list"] {{
+    .stTabs [data-baseweb="tab-list"],
+    .stTabs [role="tablist"],
+    div[data-testid="stTabs"] [role="tablist"] {{
         gap: 0.34rem;
         padding: 0.28rem;
         border-radius: 14px;
     }}
 
-    .stTabs [data-baseweb="tab"] {{
+    .stTabs [data-baseweb="tab"],
+    .stTabs [role="tab"],
+    div[data-testid="stTabs"] [role="tab"] {{
         min-height: 38px;
         flex-basis: calc(50% - 0.34rem);
         padding: 0.52rem 0.56rem;
