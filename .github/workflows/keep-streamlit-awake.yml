@@ -1,0 +1,30 @@
+name: Keep Streamlit app awake
+
+on:
+  schedule:
+    # GitHub cron is based on the clock, so this runs at 00:17, 11:17, and
+    # 22:17 UTC. The longest interval between visits is 11 hours.
+    - cron: "17 0,11,22 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keep-streamlit-awake
+  cancel-in-progress: true
+
+jobs:
+  visit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install lightweight browser automation
+        run: npm install --no-save --ignore-scripts playwright-core
+
+      - name: Visit deployed Streamlit app
+        env:
+          STREAMLIT_APP_URL: https://gini-site.streamlit.app/
+        run: node .github/scripts/keep_streamlit_awake.mjs
