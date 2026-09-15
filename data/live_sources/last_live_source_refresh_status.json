@@ -1,234 +1,188 @@
 {
-  "refresh_pipeline_version": 2,
-  "refresh_time": "2026-06-10T11:25:47.117827-04:00",
-  "last_successful_refresh_time": "2026-06-10T11:25:47.117827-04:00",
+  "refresh_pipeline_version": 4,
+  "pipeline_attempt_time": "2026-09-15T09:21:15.462229-04:00",
+  "refresh_time": "2026-09-15T09:21:15.462229-04:00",
+  "last_successful_refresh_time": "2026-09-15T09:21:37.573174-04:00",
   "ok": true,
   "complete": true,
-  "updated_any": true,
-  "selected_season": 2026,
   "attempted": true,
   "skipped": false,
-  "daily_refresh_due_time": "2026-06-09T23:59:00-04:00",
-  "daily_refresh_window_label": "2026-06-09 11:59 PM ET",
-  "next_daily_refresh_due_time": "2026-06-10T23:59:00-04:00",
-  "message": "Live sources refreshed for dashboard season 2026; nflreadpy source seasons used: 2025, 2026. Updated live source CSVs: weekly_rosters.csv, player_season_stats.csv, players.csv, snap_counts.csv, injuries.csv, draft_picks.csv, contracts.csv, depth_charts.csv, schedules.csv, teams.csv.",
-  "reason": "Last successful live source refresh (2026-06-09 04:05 PM ET) is before the 2026-06-09 11:59 PM ET daily window.",
+  "selected_season": 2026,
+  "current_season": 2026,
+  "reason": "Manual refresh forced.",
+  "message": "Authoritative 2026 refresh succeeded through Week 1 (16 completed regular-season games; 2756 PBP rows). Updated live source CSVs: weekly_rosters.csv, player_season_stats.csv, player_prior_season_stats.csv, players.csv, snap_counts.csv, injuries.csv, draft_picks.csv, depth_charts.csv, schedules.csv, teams.csv. Source errors: contracts: PermissionError: [WinError 5] Access is denied: 'C:\\\\Users\\\\cmang\\\\Desktop\\\\nfl_estat_dashboard_project\\\\data\\\\live_sources\\\\contracts.csv.tmp' -> 'C:\\\\Users\\\\cmang\\\\Desktop\\\\nfl_estat_dashboard_project\\\\data\\\\live_sources\\\\contracts.csv'.",
+  "daily_refresh_due_time": "2026-09-14T23:59:00-04:00",
+  "next_daily_refresh_due_time": "2026-09-15T23:59:00-04:00",
+  "steps": {
+    "pbp_download": {
+      "ok": true,
+      "rows": 2756,
+      "source": "nflreadpy"
+    },
+    "schedule_results_download": {
+      "ok": true,
+      "rows": 272,
+      "source": "nflreadpy"
+    },
+    "gini_team_game_rebuild": {
+      "ok": true,
+      "rows": 32
+    },
+    "gini_team_season_rebuild": {
+      "ok": true,
+      "rows": 32
+    },
+    "validation": {
+      "ok": true,
+      "historical_team_game_rows": 11396,
+      "historical_team_season_rows": 672,
+      "historical_schedule_rows": 5698,
+      "historical_team_game_digest": "247ab2b902143ab841913b7b203ca9bd4de6f16af6a67361f34c8983c26f7b86",
+      "historical_team_season_digest": "eae1162b13c173b3a6f4117ae7025e529618489f30dcecd6818afabb30635369",
+      "historical_schedule_digest": "68e8e2f0d23d9d6d650fc042c1cf21b238e9e043bfd7afd41d9d1249a0bd8fb5"
+    },
+    "atomic_output_replacement": {
+      "ok": true
+    },
+    "live_roster_context_refresh": {
+      "ok": true,
+      "message": "Updated live source CSVs: weekly_rosters.csv, player_season_stats.csv, player_prior_season_stats.csv, players.csv, snap_counts.csv, injuries.csv, draft_picks.csv, depth_charts.csv, schedules.csv, teams.csv. Source errors: contracts: PermissionError: [WinError 5] Access is denied: 'C:\\\\Users\\\\cmang\\\\Desktop\\\\nfl_estat_dashboard_project\\\\data\\\\live_sources\\\\contracts.csv.tmp' -> 'C:\\\\Users\\\\cmang\\\\Desktop\\\\nfl_estat_dashboard_project\\\\data\\\\live_sources\\\\contracts.csv'."
+    },
+    "live_leaderboard_recalculation": {
+      "ok": true,
+      "message": "Authoritative team-season inputs are current; the page cache signature will rebuild on load."
+    },
+    "predictive_model_inputs": {
+      "ok": true,
+      "message": "Completed regular-season results and current schedule are available without counting future games."
+    }
+  },
   "sources": {
     "weekly_rosters": {
       "ok": true,
       "file": "weekly_rosters.csv",
-      "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\weekly_rosters.csv",
-      "rows": 2914,
+      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\weekly_rosters.csv",
+      "rows": 5450,
       "season": 2026,
-      "modified_time": "2026-06-10T11:25:31.409707-04:00",
+      "modified_time": "2026-09-15T09:21:18.284099-04:00",
       "error": "",
       "attempts": []
     },
     "player_season_stats": {
       "ok": true,
       "file": "player_season_stats.csv",
-      "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\player_season_stats.csv",
-      "rows": 19421,
-      "season": 2025,
-      "modified_time": "2026-06-10T11:25:33.581586-04:00",
+      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\player_season_stats.csv",
+      "rows": 1118,
+      "season": 2026,
+      "modified_time": "2026-09-15T09:21:18.658849-04:00",
       "error": "",
-      "attempts": [
-        {
-          "season": 2026,
-          "ok": false,
-          "error": "ConnectionError: Failed to download https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_2026.parquet: 404 Client Error: Not Found for url: https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_2026.parquet"
-        }
-      ]
+      "attempts": []
+    },
+    "player_prior_season_stats": {
+      "ok": true,
+      "file": "player_prior_season_stats.csv",
+      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\player_prior_season_stats.csv",
+      "rows": 2020,
+      "season": 2025,
+      "modified_time": "2026-09-15T09:21:18.977865-04:00",
+      "error": "",
+      "attempts": []
     },
     "players": {
       "ok": true,
       "file": "players.csv",
-      "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\players.csv",
-      "rows": 25042,
+      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\players.csv",
+      "rows": 24823,
       "season": null,
-      "modified_time": "2026-06-10T11:25:34.610970-04:00",
+      "modified_time": "2026-09-15T09:21:19.687399-04:00",
       "error": "",
       "attempts": []
     },
     "player_snap_counts": {
       "ok": true,
       "file": "snap_counts.csv",
-      "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\snap_counts.csv",
-      "rows": 26612,
-      "season": 2025,
-      "modified_time": "2026-06-10T11:25:35.003388-04:00",
+      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\snap_counts.csv",
+      "rows": 1492,
+      "season": 2026,
+      "modified_time": "2026-09-15T09:21:20.102642-04:00",
       "error": "",
-      "attempts": [
-        {
-          "season": 2026,
-          "ok": false,
-          "error": "ValueError: Season must be between 2012 and 2025"
-        }
-      ]
+      "attempts": []
     },
     "injuries": {
       "ok": true,
       "file": "injuries.csv",
-      "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\injuries.csv",
-      "rows": 6068,
-      "season": 2025,
-      "modified_time": "2026-06-10T11:25:35.244766-04:00",
+      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\injuries.csv",
+      "rows": 182,
+      "season": 2026,
+      "modified_time": "2026-09-15T09:21:20.268712-04:00",
       "error": "",
-      "attempts": [
-        {
-          "season": 2026,
-          "ok": false,
-          "error": "ValueError: Season must be between 2009 and 2025"
-        }
-      ]
+      "attempts": []
     },
     "draft_picks": {
       "ok": true,
       "file": "draft_picks.csv",
-      "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\draft_picks.csv",
+      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\draft_picks.csv",
       "rows": 257,
       "season": 2026,
-      "modified_time": "2026-06-10T11:25:35.456692-04:00",
+      "modified_time": "2026-09-15T09:21:20.430819-04:00",
       "error": "",
       "attempts": []
     },
     "contracts": {
-      "ok": true,
+      "ok": false,
       "file": "contracts.csv",
-      "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\contracts.csv",
-      "rows": 51613,
+      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\contracts.csv",
+      "rows": 0,
       "season": null,
-      "modified_time": "2026-06-10T11:25:45.019237-04:00",
-      "error": "",
-      "attempts": []
+      "modified_time": "",
+      "error": "PermissionError: [WinError 5] Access is denied: 'C:\\\\Users\\\\cmang\\\\Desktop\\\\nfl_estat_dashboard_project\\\\data\\\\live_sources\\\\contracts.csv.tmp' -> 'C:\\\\Users\\\\cmang\\\\Desktop\\\\nfl_estat_dashboard_project\\\\data\\\\live_sources\\\\contracts.csv'",
+      "attempts": [
+        {
+          "season": null,
+          "ok": false,
+          "error": "PermissionError: [WinError 5] Access is denied: 'C:\\\\Users\\\\cmang\\\\Desktop\\\\nfl_estat_dashboard_project\\\\data\\\\live_sources\\\\contracts.csv.tmp' -> 'C:\\\\Users\\\\cmang\\\\Desktop\\\\nfl_estat_dashboard_project\\\\data\\\\live_sources\\\\contracts.csv'"
+        }
+      ]
     },
     "depth_charts": {
       "ok": true,
       "file": "depth_charts.csv",
-      "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\depth_charts.csv",
-      "rows": 226919,
+      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\depth_charts.csv",
+      "rows": 520792,
       "season": 2026,
-      "modified_time": "2026-06-10T11:25:46.715945-04:00",
+      "modified_time": "2026-09-15T09:21:37.398444-04:00",
       "error": "",
       "attempts": []
     },
     "schedules": {
       "ok": true,
       "file": "schedules.csv",
-      "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\schedules.csv",
+      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\schedules.csv",
       "rows": 272,
       "season": 2026,
-      "modified_time": "2026-06-10T11:25:46.944814-04:00",
+      "modified_time": "2026-09-15T09:21:37.416842-04:00",
       "error": "",
       "attempts": []
     },
     "teams": {
       "ok": true,
       "file": "teams.csv",
-      "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\teams.csv",
+      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\teams.csv",
       "rows": 36,
       "season": null,
-      "modified_time": "2026-06-10T11:25:47.113590-04:00",
+      "modified_time": "2026-09-15T09:21:37.571099-04:00",
       "error": "",
       "attempts": []
     }
   },
-  "freshness": {
-    "injuries": {
-      "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\injuries.csv",
-      "file": "injuries.csv",
-      "exists": true,
-      "modified_time": "2026-06-10T11:25:35.244766-04:00",
-      "age_seconds": 11.873061,
-      "freshness_cutoff": "2026-06-09T23:59:00-04:00",
-      "stale": false
-    },
-    "player_snap_counts": {
-      "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\snap_counts.csv",
-      "file": "snap_counts.csv",
-      "exists": true,
-      "modified_time": "2026-06-10T11:25:35.003388-04:00",
-      "age_seconds": 12.114439,
-      "freshness_cutoff": "2026-06-09T23:59:00-04:00",
-      "stale": false
-    },
-    "weekly_rosters": {
-      "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\weekly_rosters.csv",
-      "file": "weekly_rosters.csv",
-      "exists": true,
-      "modified_time": "2026-06-10T11:25:31.409707-04:00",
-      "age_seconds": 15.70812,
-      "freshness_cutoff": "2026-06-09T23:59:00-04:00",
-      "stale": false
-    },
-    "player_season_stats": {
-      "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\player_season_stats.csv",
-      "file": "player_season_stats.csv",
-      "exists": true,
-      "modified_time": "2026-06-10T11:25:33.581586-04:00",
-      "age_seconds": 13.536241,
-      "freshness_cutoff": "2026-06-09T23:59:00-04:00",
-      "stale": false
-    },
-    "schedules": {
-      "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\schedules.csv",
-      "file": "schedules.csv",
-      "exists": true,
-      "modified_time": "2026-06-10T11:25:46.944814-04:00",
-      "age_seconds": 0.173013,
-      "freshness_cutoff": "2026-06-09T23:59:00-04:00",
-      "stale": false
-    },
-    "players": {
-      "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\players.csv",
-      "file": "players.csv",
-      "exists": true,
-      "modified_time": "2026-06-10T11:25:34.610970-04:00",
-      "age_seconds": 12.506857,
-      "freshness_cutoff": "2026-06-09T23:59:00-04:00",
-      "stale": false
-    },
-    "teams": {
-      "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\teams.csv",
-      "file": "teams.csv",
-      "exists": true,
-      "modified_time": "2026-06-10T11:25:47.113590-04:00",
-      "age_seconds": 0.004237,
-      "freshness_cutoff": "2026-06-09T23:59:00-04:00",
-      "stale": false
-    },
-    "contracts": {
-      "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\contracts.csv",
-      "file": "contracts.csv",
-      "exists": true,
-      "modified_time": "2026-06-10T11:25:45.019237-04:00",
-      "age_seconds": 2.09859,
-      "freshness_cutoff": "2026-06-09T23:59:00-04:00",
-      "stale": false
-    },
-    "depth_charts": {
-      "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\depth_charts.csv",
-      "file": "depth_charts.csv",
-      "exists": true,
-      "modified_time": "2026-06-10T11:25:46.715945-04:00",
-      "age_seconds": 0.401882,
-      "freshness_cutoff": "2026-06-09T23:59:00-04:00",
-      "stale": false
-    },
-    "draft_picks": {
-      "path": "C:\\Users\\cmangini\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\draft_picks.csv",
-      "file": "draft_picks.csv",
-      "exists": true,
-      "modified_time": "2026-06-10T11:25:35.456692-04:00",
-      "age_seconds": 11.661135,
-      "freshness_cutoff": "2026-06-09T23:59:00-04:00",
-      "stale": false
-    }
-  },
-  "model_recalculation": {
-    "Live Leaderboard": {
-      "recalculated_time": "2026-06-10T11:26:29.040590-04:00",
-      "message": "Streamlit cache was cleared and leaderboard/team roster scores were recalculated from the refreshed live source CSVs."
-    }
-  }
+  "data_through_week": 1,
+  "latest_completed_game_date": "2026-09-14",
+  "completed_regular_season_game_count": 16,
+  "updated_any": true,
+  "pbp_row_count": 2756,
+  "current_season_team_game_rows": 32,
+  "current_season_team_season_rows": 32,
+  "regular_season_complete": false,
+  "regular_season_completion_message": "16 of 272 regular-season games have final scores.",
+  "historical_data_unchanged": true
 }

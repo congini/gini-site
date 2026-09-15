@@ -11,13 +11,6 @@ import streamlit as st
 import streamlit.components.v1 as components
 from PIL import Image, ImageOps
 
-
-st.set_page_config(
-    page_title="NFL EStat / Gini Dashboard",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
-
 APP_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = APP_DIR / "data"
 
@@ -25,6 +18,8 @@ if str(APP_DIR) not in sys.path:
     sys.path.append(str(APP_DIR))
 
 from site_nav import render_top_nav
+from gini_metrics import BASELINE_WEIGHTS, normalize_weights, recompute_overall
+from live_source_refresh import read_live_source_refresh_status
 
 BRONCOS_LOGO_PATH = APP_DIR / "assets" / "broncos_logo_centered.png"
 BRONCOS_LOGO_SOURCE = str(BRONCOS_LOGO_PATH)
@@ -62,16 +57,6 @@ TEAM_THEME_OVERRIDES = {
     "TB": {"primary": "#D50A0A", "secondary": "#34302B"},
     "TEN": {"primary": "#4B92DB", "secondary": "#C8102E"},
     "WAS": {"primary": "#5A1414", "secondary": "#FFB612"},
-}
-
-BASELINE_WEIGHTS = {
-    "Offense": 0.30,
-    "Defense": 0.30,
-    "Point Diff": 0.15,
-    "Success Margin": 0.12,
-    "Turnovers": 0.06,
-    "Penalties": 0.02,
-    "Schedule Strength": 0.05,
 }
 
 LABELS = {
@@ -124,8 +109,27 @@ LABELS = {
 }
 
 
+def dashboard_file_signature():
+    paths = [
+        DATA_DIR / "team_season_estat.csv",
+        DATA_DIR / "team_game_estat.csv",
+        DATA_DIR / "games_2005_onward.csv",
+        DATA_DIR / "nfl_season_rosters_clean_2005_2025.csv",
+        DATA_DIR / "teams_colors_logos.csv",
+        DATA_DIR / "live_sources" / "last_live_source_refresh_status.json",
+    ]
+    signature = []
+    for path in paths:
+        if path.exists():
+            stat = path.stat()
+            signature.append((path.name, int(stat.st_mtime_ns), int(stat.st_size)))
+        else:
+            signature.append((path.name, None, None))
+    return tuple(signature)
+
+
 @st.cache_data
-def load_data():
+def load_data(file_signature=None):
     team_season = pd.read_csv(DATA_DIR / "team_season_estat.csv")
     team_game = pd.read_csv(DATA_DIR / "team_game_estat.csv")
     games_path = DATA_DIR / "games_2005_onward.csv"
@@ -136,26 +140,6 @@ def load_data():
     roster = pd.read_csv(roster_path) if roster_path.exists() else pd.DataFrame()
     team_assets = pd.read_csv(assets_path) if assets_path.exists() else pd.DataFrame()
     return team_season, team_game, games, roster, team_assets
-
-
-def normalize_weights(weights):
-    total = sum(weights.values())
-    if total == 0:
-        return {key: 0 for key in weights}
-    return {key: value / total for key, value in weights.items()}
-
-
-def recompute_overall(df, weights):
-    w = normalize_weights(weights)
-    return 100 + 15 * (
-        w["Offense"] * df["off_z"]
-        + w["Defense"] * df["def_z"]
-        + w["Point Diff"] * df["pd_z"]
-        + w["Success Margin"] * df["success_z"]
-        + w["Turnovers"] * df["turnover_z"]
-        + w["Penalties"] * df["penalty_z"]
-        + w["Schedule Strength"] * df["schedule_z"]
-    )
 
 
 def readable_text_color(hex_color):
@@ -688,7 +672,7 @@ def show_deep_dive_metric(
     )
 
 
-team_season, team_game, games, roster, team_assets = load_data()
+team_season, team_game, games, roster, team_assets = load_data(dashboard_file_signature())
 
 if team_season.empty:
     st.error("No team season data found. Check the data folder.")
@@ -722,6 +706,23 @@ selected_team_logo = theme["logo"]
 
 selected_team_name = team_label_lookup.get(selected_team, selected_team)
 selected_team_record = get_team_record(team_game, selected_season, selected_team)
+refresh_status = read_live_source_refresh_status()
+recency_text = ""
+if (
+    refresh_status.get("ok")
+    and int(refresh_status.get("current_season") or 0) == selected_season
+):
+    through_week = refresh_status.get("data_through_week")
+    refreshed_at = pd.to_datetime(refresh_status.get("last_successful_refresh_time"), errors="coerce")
+    through_label = f"Through Week {int(through_week)}" if through_week is not None else "Season to date"
+    updated_label = (
+        refreshed_at.tz_convert("America/New_York").strftime("%b %-d, %Y %-I:%M %p ET")
+        if pd.notna(refreshed_at) and sys.platform != "win32"
+        else refreshed_at.tz_convert("America/New_York").strftime("%b %#d, %Y %#I:%M %p ET")
+        if pd.notna(refreshed_at)
+        else "refresh time unavailable"
+    )
+    recency_text = f'<div class="hero-team-record">{selected_season} • {through_label} · Last updated: {updated_label}</div>'
 
 if st.session_state.get("theme_team") != selected_team:
     st.session_state["theme_team"] = selected_team
@@ -1670,8 +1671,10 @@ st.markdown(
             <div class="hero-team-kicker">Team Profile</div>
             <div class="hero-team-main">{selected_season} {selected_team_name}</div>
             <div class="hero-team-record">Record: <span>{selected_team_record}</span></div>
+            {recency_text}</div>
         </div>
     </div>
+</div>
 """,
     unsafe_allow_html=True,
 )

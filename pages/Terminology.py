@@ -4,13 +4,6 @@ import streamlit as st
 from pathlib import Path
 import sys
 
-
-st.set_page_config(
-    page_title="Gini Metric Terminology",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
-
 APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.append(str(APP_DIR))

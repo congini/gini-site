@@ -23,14 +23,6 @@ try:
 except ImportError:
     SKLEARN_AVAILABLE = False
 
-
-st.set_page_config(
-    page_title="Predictive Model",
-    page_icon="🔮",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
-
 APP_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = APP_DIR / "data"
 LIVE_SOURCES_DIR = DATA_DIR / "live_sources"
@@ -40,7 +32,8 @@ if str(APP_DIR) not in sys.path:
     sys.path.append(str(APP_DIR))
 
 from site_nav import render_top_nav
-from live_source_refresh import record_model_recalculation, refresh_live_sources_if_needed
+from live_source_refresh import read_live_source_refresh_status
+from season_utils import current_projected_finish, determine_active_nfl_season
 import live_roster_scoring as roster_scoring
 
 
@@ -1088,7 +1081,15 @@ def build_model_dataset(team_season, team_game, games, schedule_sources=None, te
         model_df = model_df.sort_values(["team", "season"])
         model_df["next_season"] = model_df.groupby("team")["season"].shift(-1)
         model_df["next_season_wins"] = model_df.groupby("team")["current_wins"].shift(-1)
-        model_df.loc[model_df["next_season"] != model_df["season"] + 1, "next_season_wins"] = pd.NA
+        model_df["regular_season_complete"] = model_df.apply(
+            lambda row: row_has_completed_regular_season(row, row.get("season")), axis=1
+        )
+        model_df["next_regular_season_complete"] = model_df.groupby("team")["regular_season_complete"].shift(-1)
+        incomplete_target = (
+            model_df["next_season"].ne(model_df["season"] + 1)
+            | ~model_df["next_regular_season_complete"].fillna(False).astype(bool)
+        )
+        model_df.loc[incomplete_target, "next_season_wins"] = pd.NA
         model_df["wins_change"] = model_df["next_season_wins"] - model_df["current_wins"]
         model_df["strong_next_season"] = (model_df["next_season_wins"] >= 10).astype("Int64")
     else:
@@ -2031,6 +2032,20 @@ def write_projection_debug_log(selected_year, model_df, model_bundle):
     if model_df.empty or "season" not in model_df.columns or not model_bundle.get("available"):
         return None
 
+    target_slice = model_df[model_df["season"].eq(int(selected_year))]
+    target_games = (
+        pd.to_numeric(target_slice["scored_games"], errors="coerce")
+        if "scored_games" in target_slice.columns
+        else pd.Series(dtype=float)
+    )
+    if target_games.notna().any() and target_games.max() > 0 and PREDICTIVE_MODEL_DEBUG_LOG_PATH.exists():
+        try:
+            existing = json.loads(PREDICTIVE_MODEL_DEBUG_LOG_PATH.read_text(encoding="utf-8"))
+            if int(existing.get("selected_year", 0)) == int(selected_year):
+                return "Preserved the original/preseason projection reference after the season began."
+        except Exception:
+            pass
+
     feature_slice = model_df[model_df["season"] == feature_year].copy()
     if feature_slice.empty:
         return None
@@ -2070,6 +2085,22 @@ def write_projection_debug_log(selected_year, model_df, model_bundle):
     except Exception as exc:
         return f"Could not write predictive model debug log: {exc}"
 
+    return None
+
+
+def frozen_preseason_projection(selected_year, team):
+    """Read the pre-season snapshot without recalculating it from in-season results."""
+    if not PREDICTIVE_MODEL_DEBUG_LOG_PATH.exists():
+        return None
+    try:
+        payload = json.loads(PREDICTIVE_MODEL_DEBUG_LOG_PATH.read_text(encoding="utf-8"))
+        if int(payload.get("selected_year", 0)) != int(selected_year):
+            return None
+        for row in payload.get("rows", []):
+            if str(row.get("team", "")).upper() == str(team).upper():
+                return row
+    except Exception:
+        return None
     return None
 
 
@@ -2760,18 +2791,7 @@ file_signature = data_file_signature()
 data, load_messages = load_data(file_signature)
 team_season = data["team_season"]
 
-predictive_refresh_season = int(pd.Timestamp.now(tz="America/New_York").year)
-if not team_season.empty and "season" in team_season.columns:
-    available_refresh_seasons = pd.to_numeric(team_season["season"], errors="coerce").dropna()
-    if not available_refresh_seasons.empty:
-        predictive_refresh_season = int(available_refresh_seasons.max()) + 1
-
-live_source_refresh_ok, _ = refresh_live_sources_if_needed(predictive_refresh_season)
-if live_source_refresh_ok:
-    st.cache_data.clear()
-    file_signature = data_file_signature()
-    data, load_messages = load_data(file_signature)
-    team_season = data["team_season"]
+recorded_refresh_status = read_live_source_refresh_status()
 
 team_game = data["team_game"]
 games = data["games"]
@@ -2793,12 +2813,6 @@ model_df, skipped_columns, build_notes = build_model_dataset(
 )
 model_bundle = train_models(model_df)
 playoff_model_bundle = train_playoff_models(model_df)
-
-if live_source_refresh_ok:
-    record_model_recalculation(
-        "Predictive Model",
-        "Streamlit cache was cleared and predictive model inputs were reloaded after the live source refresh.",
-    )
 
 team_name_lookup = build_team_name_lookup(team_assets)
 team_theme_lookup = build_team_theme_lookup(team_assets)
@@ -2828,7 +2842,8 @@ if model_df.empty:
     st.stop()
 
 latest_completed_season = seasons_available[-1]
-future_prediction_year = latest_completed_season + 1
+active_season = determine_active_nfl_season()
+future_prediction_year = active_season if active_season - 1 in seasons_available else latest_completed_season + 1
 actual_schedule_years = available_schedule_years(schedule_sources)
 scheduled_projection_years = [year for year in actual_schedule_years if year - 1 in seasons_available]
 prediction_year_options = sorted(set(seasons_available + [future_prediction_year] + scheduled_projection_years))
@@ -2851,7 +2866,7 @@ if st.session_state.get("predictor_selected_season_control") not in season_optio
 season_slice = model_df[model_df["season"] == selected_season].copy()
 feature_year_for_controls = selected_season - 1
 feature_slice_for_controls = model_df[model_df["season"] == feature_year_for_controls].copy()
-team_source_slice = season_slice if not season_slice.empty else feature_slice_for_controls
+team_source_slice = feature_slice_for_controls if not feature_slice_for_controls.empty else season_slice
 
 teams_available = sorted(team_source_slice["team"].dropna().astype(str).unique())
 default_team = "DEN" if "DEN" in teams_available else teams_available[0]
@@ -3232,6 +3247,15 @@ with tab_regular:
             )
 
         predicted_wins, probability = get_prediction_for_row(selected_row, model_bundle)
+        preseason_reference = frozen_preseason_projection(prediction_target_year, selected_team)
+        if preseason_reference is not None:
+            frozen_wins = pd.to_numeric(preseason_reference.get("projected_wins"), errors="coerce")
+            frozen_probability = pd.to_numeric(preseason_reference.get("ten_plus_win_chance"), errors="coerce")
+            if pd.notna(frozen_wins):
+                predicted_wins = float(frozen_wins)
+                projection_input_helper = "Frozen original/preseason projection reference"
+            if pd.notna(frozen_probability):
+                probability = float(frozen_probability)
         projected_wins = max(0, min(17, predicted_wins)) if predicted_wins is not None else None
 
         model_mae = model_bundle.get("metrics", {}).get("model_mae") if model_bundle.get("available") else None
@@ -3246,13 +3270,25 @@ with tab_regular:
             if target_row is not None
             else pd.NA
         )
+        actual_selected_year_losses = (
+            target_row.get("current_losses")
+            if target_row is not None
+            else pd.NA
+        )
+        actual_selected_year_ties = (
+            target_row.get("current_ties")
+            if target_row is not None
+            else pd.NA
+        )
         selected_year_games_played = (
             target_row.get("scored_games")
             if target_row is not None
             else pd.NA
         )
         full_regular_season_games = expected_regular_season_games(prediction_target_year)
-        model_result_helper = f"Projection vs. {prediction_target_year} pace/result"
+        model_result_label = "Current Projected Finish"
+        model_result_helper = "Banked results + frozen preseason rate for remaining games"
+        current_finish_value = None
 
         if pd.isna(actual_selected_year_wins):
             actual_wins_text = "Not available yet."
@@ -3265,19 +3301,45 @@ with tab_regular:
 
             if projected_wins is None or pd.isna(projected_wins):
                 model_result_text = "Projection unavailable."
+            elif games_played_value <= 0:
+                current_finish_value = float(projected_wins)
+                model_result_text = f"{current_finish_value:.1f} wins"
+                model_result_helper = "No completed games; matches the frozen preseason projection"
             elif games_played_value > 0 and games_played_value < full_regular_season_games:
-                current_win_pace = (actual_wins_value / games_played_value) * full_regular_season_games
-                pace_difference = current_win_pace - float(projected_wins)
-
-                if abs(pace_difference) < 0.05:
-                    model_result_text = f"Currently on pace for {current_win_pace:.1f} wins, matching projection."
-                elif pace_difference > 0:
-                    model_result_text = f"Currently on pace for {current_win_pace:.1f} wins, {pace_difference:.1f} above projection."
+                ties_value = (
+                    float(actual_selected_year_ties)
+                    if pd.notna(actual_selected_year_ties)
+                    else 0.0
+                )
+                current_finish_value = current_projected_finish(
+                    actual_wins_value,
+                    ties_value,
+                    games_played_value,
+                    projected_wins,
+                    prediction_target_year,
+                )
+                model_result_text = f"{current_finish_value:.1f} wins"
+                remaining_games = max(0, full_regular_season_games - int(games_played_value))
+                outlook_difference = current_finish_value - float(projected_wins)
+                if abs(outlook_difference) < 0.05:
+                    comparison_text = "matching the original projection"
+                elif outlook_difference > 0:
+                    comparison_text = f"{outlook_difference:.1f} above the original projection"
                 else:
-                    model_result_text = f"Currently on pace for {current_win_pace:.1f} wins, {abs(pace_difference):.1f} below projection."
+                    comparison_text = f"{abs(outlook_difference):.1f} below the original projection"
+                model_result_helper = (
+                    f"{int(games_played_value)} final, {remaining_games} remaining; {comparison_text}"
+                )
             else:
+                model_result_label = "Final Result vs. Projection"
                 model_result_helper = ""
-                difference = actual_wins_value - float(projected_wins)
+                ties_value = (
+                    float(actual_selected_year_ties)
+                    if pd.notna(actual_selected_year_ties)
+                    else 0.0
+                )
+                current_finish_value = actual_wins_value + 0.5 * ties_value
+                difference = current_finish_value - float(projected_wins)
 
                 if abs(difference) < 0.05:
                     model_result_text = "Actual matched the projection."
@@ -3330,15 +3392,27 @@ with tab_regular:
 
         metric_cols = st.columns(4)
         with metric_cols[0]:
+            record_parts = []
+            if pd.notna(actual_selected_year_wins):
+                record_parts.append(str(int(float(actual_selected_year_wins))))
+                if pd.notna(actual_selected_year_losses):
+                    record_parts.append(str(int(float(actual_selected_year_losses))))
+                if pd.notna(actual_selected_year_ties) and float(actual_selected_year_ties) > 0:
+                    record_parts.append(str(int(float(actual_selected_year_ties))))
+            record_helper = (
+                f"Actual record: {'-'.join(record_parts)}"
+                if len(record_parts) >= 2
+                else f"Actual {prediction_target_year} wins"
+            )
             render_metric_card(
                 f"{prediction_target_year} Wins",
                 actual_wins_text,
-                f"Actual {prediction_target_year} wins",
+                record_helper,
                 accent=team_primary,
             )
         with metric_cols[1]:
             render_metric_card(
-                f"Projected {prediction_target_year} Wins",
+                f"Original / Preseason Projected {prediction_target_year} Wins",
                 win_text(projected_wins, 1) if projected_wins is not None else "Model unavailable",
                 projection_input_helper,
                 accent=team_secondary,
@@ -3352,7 +3426,7 @@ with tab_regular:
             )
         with metric_cols[3]:
             render_metric_card(
-                "Model Result",
+                model_result_label,
                 model_result_text,
                 model_result_helper,
                 accent=team_secondary,
@@ -3379,10 +3453,12 @@ with tab_regular:
         )
 
         comparison_values = [
-            (f"Projected {prediction_target_year} Wins", projected_wins),
+            (f"Original {prediction_target_year} Projection", projected_wins),
         ]
+        if current_finish_value is not None and games_played_value < full_regular_season_games:
+            comparison_values.append((f"Current {prediction_target_year} Outlook", current_finish_value))
         if pd.notna(actual_selected_year_wins):
-            comparison_values.append((f"Actual {prediction_target_year} Wins", actual_selected_year_wins))
+            comparison_values.append((f"Wins Earned Through {int(games_played_value)} Game{'s' if games_played_value != 1 else ''}", actual_selected_year_wins))
 
         comparison_df = pd.DataFrame(comparison_values, columns=["Win View", "Wins"]).dropna()
         if not comparison_df.empty:
@@ -3391,7 +3467,7 @@ with tab_regular:
                 x="Win View",
                 y="Wins",
                 color="Win View",
-                color_discrete_sequence=[team_secondary, team_primary],
+                color_discrete_sequence=[team_secondary, team_primary, "#94A3B8"],
                 title=f"{selected_label}: {prediction_target_year} Regular-Season Projection",
                 labels={"Win View": "Win View", "Wins": "Wins"},
             )

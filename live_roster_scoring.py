@@ -39,6 +39,7 @@ LIVE_ROSTER_SOURCE_KEYS = [
     "weekly_rosters",
     "player_weekly_stats",
     "player_season_stats",
+    "player_prior_season_stats",
     "player_snap_counts",
     "injuries",
     "transactions",
@@ -169,10 +170,11 @@ def load_player_stats(future_data):
     stats = {
         "weekly": future_data.get("player_weekly_stats", pd.DataFrame()).copy(),
         "seasonal": future_data.get("player_season_stats", pd.DataFrame()).copy(),
+        "prior": future_data.get("player_prior_season_stats", pd.DataFrame()).copy(),
         "snaps": future_data.get("player_snap_counts", pd.DataFrame()).copy(),
         "injuries": future_data.get("injuries", pd.DataFrame()).copy(),
     }
-    production_found = not stats["weekly"].empty or not stats["seasonal"].empty
+    production_found = not stats["weekly"].empty or not stats["seasonal"].empty or not stats["prior"].empty
     return stats, production_found
 
 
@@ -402,6 +404,9 @@ def derive_player_production_scores(stats_df):
     if stats.empty:
         return pd.DataFrame(columns=["player_key", "production_score", "games_played"])
 
+    # Count the football production itself once. Fantasy-point columns are
+    # intentionally excluded because they repackage the same yards and touchdowns
+    # and previously rewarded those plays twice.
     weighted_columns = {
         "passing_yards": 0.006,
         "pass_yards": 0.006,
@@ -409,8 +414,11 @@ def derive_player_production_scores(stats_df):
         "pass_tds": 1.6,
         "interceptions": -2.4,
         "sacks": 2.0,
+        "def_sacks": 2.0,
         "qb_hits": 1.3,
+        "def_qb_hits": 1.3,
         "tackles_for_loss": 1.5,
+        "def_tackles_for_loss": 1.5,
         "rushing_yards": 0.010,
         "rush_yards": 0.010,
         "receiving_yards": 0.010,
@@ -420,12 +428,15 @@ def derive_player_production_scores(stats_df):
         "receiving_tds": 1.2,
         "rushing_tds": 1.2,
         "touchdowns": 1.2,
-        "fantasy_points": 0.18,
-        "fantasy_points_ppr": 0.15,
         "tackles": 0.16,
         "def_tackles": 0.16,
+        "def_tackles_solo": 0.16,
+        "def_tackle_assists": 0.08,
         "passes_defended": 1.2,
         "pass_defended": 1.2,
+        "def_pass_defended": 1.2,
+        "def_interceptions": 2.4,
+        "passing_interceptions": -2.4,
         "epa": 10.0,
         "passing_epa": 10.0,
         "receiving_epa": 10.0,
@@ -440,14 +451,40 @@ def derive_player_production_scores(stats_df):
     if not used:
         return pd.DataFrame(columns=["player_key", "production_score", "games_played"])
 
-    games_col = first_existing_column(stats, ["games", "games_played", "recent_team_games", "week"])
-    games_played = pd.to_numeric(stats[games_col], errors="coerce").fillna(0) if games_col else pd.Series(0, index=stats.index)
-    player_scores = pd.DataFrame({"player_key": stats["player_key"], "production_raw": raw, "games_played": games_played})
+    position_col = first_existing_column(stats, ["position", "position_group", "pos"])
+    if position_col is None:
+        production_group = pd.Series("other", index=stats.index)
+    else:
+        production_group = stats[position_col].fillna("").map(lambda value: position_group(value, value))
+
+    games_col = first_existing_column(stats, ["games", "games_played", "recent_team_games"])
+    if games_col is not None:
+        games_played = pd.to_numeric(stats[games_col], errors="coerce").fillna(0)
+    elif "game_id" in stats.columns:
+        games_played = stats.groupby("player_key")["game_id"].transform("nunique")
+    elif "week" in stats.columns:
+        games_played = stats.groupby("player_key")["week"].transform("nunique")
+    else:
+        games_played = pd.Series(1, index=stats.index)
+
+    player_scores = pd.DataFrame(
+        {
+            "player_key": stats["player_key"],
+            "production_group": production_group,
+            "production_raw": raw,
+            "games_played": games_played,
+        }
+    )
     player_scores = player_scores.groupby("player_key", as_index=False).agg(
+        production_group=("production_group", "first"),
         production_raw=("production_raw", "sum"),
         games_played=("games_played", "max"),
     )
-    player_scores["production_score"] = normalize_score(player_scores["production_raw"], center=75, spread=12, lower=45, upper=100)
+    divisor = pd.to_numeric(player_scores["games_played"], errors="coerce").clip(lower=1).fillna(1)
+    player_scores["production_per_game"] = player_scores["production_raw"] / divisor
+    player_scores["production_score"] = player_scores.groupby("production_group")["production_per_game"].transform(
+        lambda values: normalize_score(values, center=75, spread=12, lower=45, upper=100)
+    )
     return player_scores[["player_key", "production_score", "games_played"]]
 
 
@@ -484,6 +521,18 @@ def standardize_roster_columns(roster, selected_season, historical_roster=None):
     output["years_exp"] = output["years_exp"].fillna(selected_season - output["entry_year"])
     output["years_exp"] = output["years_exp"].fillna(selected_season - output["rookie_year"])
     output["years_exp"] = output["years_exp"].clip(lower=0, upper=22).fillna(3)
+    # Weekly roster feeds append a new snapshot every week. Keep only the latest
+    # team/status row for each player so roster depth does not grow artificially.
+    if "week" in output.columns:
+        output["_roster_week"] = pd.to_numeric(output["week"], errors="coerce").fillna(-1)
+        output["_roster_player_key"] = build_player_match_key(output)
+        blank_key = output["_roster_player_key"].eq("")
+        output.loc[blank_key, "_roster_player_key"] = "row:" + output.index[blank_key].astype(str)
+        output = output.sort_values(["_roster_player_key", "season", "_roster_week"])
+        output = output.drop_duplicates("_roster_player_key", keep="last")
+        output = output.drop(columns=["_roster_week", "_roster_player_key"], errors="ignore")
+    departed_statuses = {"CUT", "WAIVED", "RELEASED", "UFA", "NWT"}
+    output = output[~output["status"].isin(departed_statuses)].copy()
     return output
 
 
@@ -589,40 +638,61 @@ def calculate_rookie_projection_score(row):
 
 def calculate_player_score_blend(player_row, current_week=None):
     fallback = 0.45 * calculate_draft_capital_score(player_row) + 0.40 * calculate_experience_score(player_row) + 0.15 * calculate_rookie_projection_score(player_row)
-    production = pd.to_numeric(player_row.get("production_score"), errors="coerce")
-    if pd.isna(production):
+    current_production = pd.to_numeric(player_row.get("production_score"), errors="coerce")
+    prior_production = pd.to_numeric(player_row.get("prior_production_score"), errors="coerce")
+    if pd.isna(current_production) and pd.isna(prior_production):
         return float(np.clip(fallback, 35, 98))
+
     games_played = pd.to_numeric(player_row.get("games_played"), errors="coerce")
-    games_played = 0 if pd.isna(games_played) else games_played
-    fallback_weight = 0.90 if games_played <= 2 else 0.65 if games_played <= 5 else 0.40 if games_played <= 9 else 0.15
-    return float(np.clip(fallback_weight * fallback + (1 - fallback_weight) * production, 35, 100))
+    games_played = 0.0 if pd.isna(games_played) else max(0.0, float(games_played))
+    current_weight = min(0.75, 0.075 * games_played)
+
+    # Established NFL performance supersedes draft position. Current-season
+    # production is phased in to avoid one-game overreaction while still becoming
+    # the dominant signal by midseason.
+    if pd.notna(prior_production):
+        if pd.isna(current_production):
+            return float(np.clip(prior_production, 35, 100))
+        return float(np.clip((1 - current_weight) * prior_production + current_weight * current_production, 35, 100))
+
+    # For rookies and players with no prior NFL sample, pedigree remains a bridge
+    # until enough current production exists.
+    current_weight = max(0.10, current_weight)
+    return float(np.clip((1 - current_weight) * fallback + current_weight * current_production, 35, 100))
 
 
 def build_player_stat_scores(roster, player_stats):
     output = roster.copy()
     output["production_score"] = pd.NA
+    output["prior_production_score"] = pd.NA
     output["games_played"] = pd.NA
-    player_stats = player_stats or {"seasonal": pd.DataFrame(), "weekly": pd.DataFrame()}
+    player_stats = player_stats or {"seasonal": pd.DataFrame(), "weekly": pd.DataFrame(), "prior": pd.DataFrame()}
     seasonal_scores = derive_player_production_scores(player_stats.get("seasonal", pd.DataFrame()))
     weekly_scores = derive_player_production_scores(player_stats.get("weekly", pd.DataFrame()))
-    score_frames = [df for df in [seasonal_scores, weekly_scores] if not df.empty]
-    if not score_frames:
+    prior_scores = derive_player_production_scores(player_stats.get("prior", pd.DataFrame()))
+    current_scores = seasonal_scores if not seasonal_scores.empty else weekly_scores
+    if current_scores.empty and prior_scores.empty:
         return output, False
 
-    scores = pd.concat(score_frames, ignore_index=True)
-    scores = scores.groupby("player_key", as_index=False).agg(
-        production_score=("production_score", "max"),
-        games_played=("games_played", "max"),
-    )
     roster_keys = output[["name_key"]].copy()
     roster_keys["player_key"] = output.get("gsis_id", pd.Series("", index=output.index)).fillna("").astype(str).str.lower().str.strip()
     roster_keys.loc[roster_keys["player_key"].eq(""), "player_key"] = roster_keys.loc[roster_keys["player_key"].eq(""), "name_key"]
     output["player_key"] = roster_keys["player_key"]
-    output = output.merge(scores, on="player_key", how="left", suffixes=("", "_from_stats"))
-    output["production_score"] = output["production_score_from_stats"].combine_first(output["production_score"])
-    output["games_played"] = output["games_played_from_stats"].combine_first(output["games_played"])
-    output = output.drop(columns=["production_score_from_stats", "games_played_from_stats"], errors="ignore")
-    return output, output["production_score"].notna().any()
+    if not current_scores.empty:
+        current_scores = current_scores.drop_duplicates("player_key", keep="last")
+        output = output.merge(current_scores, on="player_key", how="left", suffixes=("", "_from_stats"))
+        output["production_score"] = output["production_score_from_stats"].combine_first(output["production_score"])
+        output["games_played"] = output["games_played_from_stats"].combine_first(output["games_played"])
+        output = output.drop(columns=["production_score_from_stats", "games_played_from_stats"], errors="ignore")
+    if not prior_scores.empty:
+        prior_scores = prior_scores[["player_key", "production_score"]].rename(
+            columns={"production_score": "prior_production_from_stats"}
+        ).drop_duplicates("player_key", keep="last")
+        output = output.merge(prior_scores, on="player_key", how="left")
+        output["prior_production_score"] = output["prior_production_from_stats"].combine_first(output["prior_production_score"])
+        output = output.drop(columns=["prior_production_from_stats"], errors="ignore")
+    production_used = output[["production_score", "prior_production_score"]].notna().any(axis=1).any()
+    return output, bool(production_used)
 
 
 def weighted_top_average(values, top_n, neutral=70):
@@ -696,7 +766,10 @@ def calculate_team_roster_score(roster, selected_season, team_universe, historic
             rows.append({**{"team": team}, **neutral})
             continue
         group_scores = build_position_group_scores(team_roster)
-        availability_score = float(np.clip(50 + 50 * team_roster["availability_multiplier"].mean(), 50, 100))
+        availability_pool = team_roster[~team_roster["status"].isin({"DEV", "PRACTICE", "PS"})]
+        if availability_pool.empty:
+            availability_pool = team_roster
+        availability_score = float(np.clip(50 + 50 * availability_pool["availability_multiplier"].mean(), 50, 100))
         rookie_mask = (team_roster["years_exp"] <= 1) | (team_roster["entry_year"] >= selected_season - 1)
         rookie_score = weighted_top_average(team_roster.loc[rookie_mask, "rookie_player_score"], 5, 65)
         experience_score = weighted_top_average(team_roster["experience_score"], 30, 72)

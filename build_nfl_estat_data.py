@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from gini_metrics import apply_default_gini_scores, finalize_schedule_adjusted_gini
+
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
@@ -210,37 +212,11 @@ team_season["penalty_yards_margin_per_game"] = team_season["penalty_yards_margin
 team_season["success_margin"] = team_season["off_success_rate"] - team_season["def_success_allowed"]
 team_season["yards_per_play"] = team_season["yards_gained"] / team_season["off_plays"].replace(0, np.nan)
 
-# Default standardized component scores by season.
-team_season["off_z"] = zscore_by_season(team_season, "off_adj_epa")
-team_season["def_z"] = zscore_by_season(team_season, "def_adj_epa")
-team_season["pd_z"] = zscore_by_season(team_season, "point_diff_per_game")
-team_season["success_z"] = zscore_by_season(team_season, "success_margin")
-team_season["turnover_z"] = zscore_by_season(team_season, "turnover_margin_per_game")
-team_season["penalty_z"] = zscore_by_season(team_season, "penalty_yards_margin_per_game")
-
-team_season["offense_estat"] = 100 + 15 * team_season["off_z"]
-team_season["defense_estat"] = 100 + 15 * team_season["def_z"]
-team_season["overall_estat"] = 100 + 15 * (
-    0.30 * team_season["off_z"]
-    + 0.30 * team_season["def_z"]
-    + 0.15 * team_season["pd_z"]
-    + 0.15 * team_season["success_z"]
-    + 0.07 * team_season["turnover_z"]
-    + 0.03 * team_season["penalty_z"]
+# Apply the exact active Dashboard defaults, including its schedule-strength term.
+team_season = finalize_schedule_adjusted_gini(
+    apply_default_gini_scores(team_season),
+    team_game,
 )
-
-# Strength of schedule: average opponent overall_estat by games played.
-opp_scores = team_season[["season", "team", "overall_estat"]].rename(columns={"team": "opponent", "overall_estat": "opponent_overall_estat"})
-team_game_sos = team_game.merge(opp_scores, on=["season", "opponent"], how="left")
-sos = team_game_sos.groupby(["season", "team"], as_index=False).agg(schedule_strength=("opponent_overall_estat", "mean"))
-team_season = team_season.merge(sos, on=["season", "team"], how="left")
-team_season["schedule_strength_z"] = zscore_by_season(team_season, "schedule_strength")
-
-# Rank fields.
-team_season["overall_rank"] = team_season.groupby("season")["overall_estat"].rank(ascending=False, method="min").astype(int)
-team_season["offense_rank"] = team_season.groupby("season")["offense_estat"].rank(ascending=False, method="min").astype(int)
-team_season["defense_rank"] = team_season.groupby("season")["defense_estat"].rank(ascending=False, method="min").astype(int)
-team_season["sos_rank"] = team_season.groupby("season")["schedule_strength"].rank(ascending=False, method="min").astype(int)
 
 # Sort and save.
 team_game = team_game.sort_values(["season", "week", "team"]).reset_index(drop=True)

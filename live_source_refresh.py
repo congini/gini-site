@@ -17,11 +17,12 @@ LIVE_SOURCES_DIR = DATA_DIR / "live_sources"
 LIVE_SOURCE_REFRESH_LOG_PATH = LIVE_SOURCES_DIR / "last_live_source_refresh.txt"
 LIVE_SOURCE_REFRESH_STATUS_PATH = LIVE_SOURCES_DIR / "last_live_source_refresh_status.json"
 DAILY_REFRESH_TIME = time(23, 59)
-REFRESH_PIPELINE_VERSION = 2
+REFRESH_PIPELINE_VERSION = 4
 
 LIVE_SOURCE_CACHE_FILES = {
     "player_weekly_stats": LIVE_SOURCES_DIR / "player_weekly_stats.csv",
     "player_season_stats": LIVE_SOURCES_DIR / "player_season_stats.csv",
+    "player_prior_season_stats": LIVE_SOURCES_DIR / "player_prior_season_stats.csv",
     "players": LIVE_SOURCES_DIR / "players.csv",
     "player_snap_counts": LIVE_SOURCES_DIR / "snap_counts.csv",
     "weekly_rosters": LIVE_SOURCES_DIR / "weekly_rosters.csv",
@@ -39,6 +40,7 @@ REQUIRED_LIVE_SOURCE_KEYS = (
     "player_snap_counts",
     "weekly_rosters",
     "player_season_stats",
+    "player_prior_season_stats",
     "schedules",
     "players",
     "teams",
@@ -136,28 +138,45 @@ def live_source_refresh_window_context(reference_time=None):
 
 
 def get_live_source_file_state(reference_time=None, freshness_cutoff=None):
+    """Report freshness from authoritative refresh metadata, never file mtimes."""
     reference_time = coerce_et(reference_time or now_et())
     freshness_cutoff = coerce_et(freshness_cutoff or latest_daily_refresh_due_time(reference_time))
+    status = read_live_source_refresh_status()
+    last_success = parse_et_timestamp(status.get("last_successful_refresh_time"))
+    source_results = status.get("sources", {}) if isinstance(status.get("sources"), dict) else {}
+    authoritative = status.get("refresh_pipeline_version") == REFRESH_PIPELINE_VERSION
     state = {}
 
     for key in REQUIRED_LIVE_SOURCE_KEYS:
         path = _source_path(key)
         exists = path.exists()
-        modified_time = None
-        age_seconds = None
-
-        if exists:
-            modified_time = datetime.fromtimestamp(path.stat().st_mtime, ET)
-            age_seconds = max(0.0, (reference_time - modified_time).total_seconds())
+        source_result = source_results.get(key, {}) if isinstance(source_results.get(key), dict) else {}
+        source_ok = bool(source_result.get("ok", False))
+        verified_time = last_success if authoritative and source_ok else None
+        age_seconds = (
+            max(0.0, (reference_time - verified_time).total_seconds())
+            if verified_time is not None
+            else None
+        )
 
         state[key] = {
             "path": str(path),
             "file": path.name,
             "exists": exists,
-            "modified_time": _iso_or_empty(modified_time),
+            "verified_refresh_time": _iso_or_empty(verified_time),
             "age_seconds": age_seconds,
             "freshness_cutoff": freshness_cutoff.isoformat(),
-            "stale": (not exists) or modified_time is None or modified_time < freshness_cutoff,
+            "freshness_authority": "pipeline_metadata",
+            "source_ok": source_ok,
+            "source_season": source_result.get("season"),
+            "rows": source_result.get("rows"),
+            "stale": (
+                not authoritative
+                or not exists
+                or not source_ok
+                or verified_time is None
+                or verified_time < freshness_cutoff
+            ),
         }
 
     return state
@@ -204,7 +223,6 @@ def should_refresh_live_sources(force=False):
     reference_time = now_et()
     latest_due = latest_daily_refresh_due_time(reference_time)
     file_state = get_live_source_file_state(reference_time, freshness_cutoff=latest_due)
-    stale_keys = [key for key, info in file_state.items() if info["stale"]]
     window_label = format_refresh_window_time(latest_due)
 
     if force:
@@ -212,24 +230,18 @@ def should_refresh_live_sources(force=False):
 
     status = read_live_source_refresh_status()
     last_success = read_last_successful_live_source_refresh()
+    authoritative = status.get("refresh_pipeline_version") == REFRESH_PIPELINE_VERSION
 
-    if not stale_keys:
-        if last_success is not None and last_success >= latest_due:
-            return (
-                False,
-                f"All required live source CSV files are fresh for the {window_label} daily window; "
-                f"last successful refresh was {format_refresh_window_time(last_success)}.",
-                file_state,
-            )
+    if authoritative and last_success is not None and last_success >= latest_due:
         return (
             False,
-            f"All required live source CSV files are already fresh for the {window_label} daily window; "
-            "no additional page-open refresh is needed.",
+            f"The authoritative current-season pipeline succeeded for the {window_label} daily window at "
+            f"{format_refresh_window_time(last_success)}.",
             file_state,
         )
 
     last_attempt = read_last_live_source_refresh_attempt()
-    attempted_by_current_pipeline = status.get("refresh_pipeline_version") == REFRESH_PIPELINE_VERSION
+    attempted_by_current_pipeline = authoritative
 
     if attempted_by_current_pipeline and last_attempt is not None and last_attempt >= latest_due:
         return (
@@ -239,8 +251,11 @@ def should_refresh_live_sources(force=False):
             file_state,
         )
 
+    if not authoritative:
+        return True, "No authoritative current-season pipeline refresh is recorded; legacy/file timestamps are not accepted as freshness proof.", file_state
+
     if last_success is None:
-        return True, f"No previous successful live source refresh is recorded for the {window_label} daily window.", file_state
+        return True, f"No previous successful current-season refresh is recorded for the {window_label} daily window.", file_state
 
     if last_success < latest_due:
         return (
@@ -250,7 +265,7 @@ def should_refresh_live_sources(force=False):
             file_state,
         )
 
-    return True, f"At least one required live source CSV is stale or missing for the {window_label} daily window.", file_state
+    return True, f"The authoritative current-season pipeline is due for the {window_label} daily window.", file_state
 
 
 def is_nflreadpy_available():
@@ -348,6 +363,44 @@ def _season_candidates(selected_season):
     return candidates
 
 
+CONTRACT_EXPORT_COLUMNS = (
+    "player",
+    "position",
+    "team",
+    "is_active",
+    "year_signed",
+    "years",
+    "value",
+    "apy",
+    "guaranteed",
+    "apy_cap_pct",
+    "inflated_value",
+    "inflated_apy",
+    "inflated_guaranteed",
+    "otc_id",
+    "gsis_id",
+)
+
+
+def compact_contracts_frame(df):
+    """Keep deployable current contract context without nflverse history blobs."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    output = df.copy()
+    if "is_active" in output.columns:
+        active = output["is_active"].fillna(False)
+        active_mask = active.eq(True) | active.astype(str).str.strip().str.lower().isin({"true", "1", "yes"})
+        if active_mask.any():
+            output = output.loc[active_mask].copy()
+
+    export_columns = [column for column in CONTRACT_EXPORT_COLUMNS if column in output.columns]
+    if export_columns:
+        output = output.loc[:, export_columns].copy()
+
+    return output.drop_duplicates().reset_index(drop=True)
+
+
 SOURCE_LOADERS = (
     {
         "key": "weekly_rosters",
@@ -359,6 +412,13 @@ SOURCE_LOADERS = (
         "loader_names": ("load_player_stats", "load_player_stats_seasons", "import_player_stats"),
         "seasonal": True,
         "kwargs": {"summary_level": "week"},
+    },
+    {
+        "key": "player_prior_season_stats",
+        "loader_names": ("load_player_stats", "load_player_stats_seasons", "import_player_stats"),
+        "seasonal": True,
+        "season_offset": -1,
+        "kwargs": {"summary_level": "reg"},
     },
     {
         "key": "players",
@@ -384,6 +444,7 @@ SOURCE_LOADERS = (
         "key": "contracts",
         "loader_names": ("load_contracts", "import_contracts"),
         "seasonal": False,
+        "transform": compact_contracts_frame,
     },
     {
         "key": "depth_charts",
@@ -418,7 +479,8 @@ def _refresh_source(nfl, source, selected_season):
     attempts = []
 
     if source.get("seasonal", True):
-        season_attempts = _season_candidates(selected_season)
+        requested_season = int(selected_season) + int(source.get("season_offset", 0))
+        season_attempts = _season_candidates(requested_season)
     else:
         season_attempts = [None]
 
@@ -437,6 +499,19 @@ def _refresh_source(nfl, source, selected_season):
                     }
                 )
                 continue
+
+            transform = source.get("transform")
+            if transform is not None:
+                df = transform(df)
+                if df.empty:
+                    attempts.append(
+                        {
+                            "season": season,
+                            "ok": False,
+                            "error": "source transform returned an empty dataframe",
+                        }
+                    )
+                    continue
 
             _save_dataframe_csv(df, path)
             modified_time = datetime.fromtimestamp(path.stat().st_mtime, ET)
@@ -630,66 +705,8 @@ def record_model_recalculation(page_name, message):
 
 
 def refresh_live_sources_if_needed(selected_season=None, force=False):
-    selected_season = _coerce_selected_season(selected_season)
-    should_refresh, reason, _ = should_refresh_live_sources(force=force)
-    window_context = live_source_refresh_window_context()
+    """Compatibility delegate for the single authoritative pipeline."""
+    from refresh_current_season import refresh_current_season
 
-    def status_tail():
-        last_success = read_last_successful_live_source_refresh()
-        last_attempt = read_last_live_source_refresh_attempt()
-        parts = [
-            f"Daily refresh window: {window_context['latest_due_label']}.",
-            f"Next scheduled window: {window_context['next_due_label']}.",
-        ]
-        if last_success is None:
-            parts.append("Last successful refresh: none recorded.")
-        else:
-            parts.append(f"Last successful refresh: {format_refresh_window_time(last_success)}.")
-        if last_attempt is not None:
-            parts.append(f"Last attempt: {format_refresh_window_time(last_attempt)}.")
-        return " ".join(parts)
-
-    if not should_refresh:
-        last_ok, last_message = read_last_live_source_refresh_status()
-        if last_message == "No previous live source refresh status found.":
-            return False, f"Skipped live source refresh. {reason} {status_tail()}"
-        return False, f"Skipped live source refresh. {reason} {status_tail()} Previous result: {last_message}"
-
-    updated_any, message, saved_files, source_results = update_local_data_from_nflverse(
-        selected_season,
-        return_details=True,
-    )
-    required_failures = {
-        key: result
-        for key, result in source_results.items()
-        if key in REQUIRED_LIVE_SOURCE_KEYS and not result.get("ok", False)
-    }
-    complete = bool(updated_any and not required_failures)
-
-    if updated_any:
-        seasons_used = sorted(
-            {
-                int(result["season"])
-                for result in source_results.values()
-                if result.get("ok") and result.get("season") is not None
-            }
-        )
-        season_text = ", ".join(str(season) for season in seasons_used) if seasons_used else "static"
-        full_message = (
-            f"Live sources refreshed for dashboard season {selected_season}; "
-            f"nflreadpy source seasons used: {season_text}. {message}"
-        )
-    else:
-        full_message = (
-            f"Live source refresh attempted for dashboard season {selected_season}, "
-            f"but no cacheable files were updated. {message}"
-        )
-
-    mark_live_sources_refreshed(
-        ok=complete,
-        message=full_message,
-        source_results=source_results,
-        selected_season=selected_season,
-        reason=reason,
-    )
-    return updated_any, f"{full_message} {status_tail()}"
+    ok, message, _ = refresh_current_season(selected_season, force=force)
+    return ok, message

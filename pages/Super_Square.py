@@ -11,13 +11,6 @@ import requests
 import streamlit as st
 from PIL import Image, ImageOps
 
-
-st.set_page_config(
-    page_title="Super Square",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
-
 # -----------------------------
 # PATH SETUP
 # -----------------------------
@@ -29,6 +22,7 @@ if str(APP_DIR) not in sys.path:
     sys.path.append(str(APP_DIR))
 
 from site_nav import render_top_nav
+from season_utils import determine_active_nfl_season, regular_season_completion_status
 
 
 PRIMARY = "#F15A24"
@@ -65,6 +59,7 @@ SUPER_BOWL_WINNERS = {
 SUPER_SQUARE_SOURCE_FILES = {
     "team_season": DATA_DIR / "team_season_estat.csv",
     "team_game": DATA_DIR / "team_game_estat.csv",
+    "games": DATA_DIR / "games_2005_onward.csv",
     "team_assets": DATA_DIR / "teams_colors_logos.csv",
 }
 
@@ -95,9 +90,10 @@ def super_square_file_signature():
 def load_super_square_data(file_signature=None):
     team_season = pd.read_csv(DATA_DIR / "team_season_estat.csv")
     team_game = pd.read_csv(DATA_DIR / "team_game_estat.csv")
+    games = pd.read_csv(DATA_DIR / "games_2005_onward.csv")
     assets_path = DATA_DIR / "teams_colors_logos.csv"
     team_assets = pd.read_csv(assets_path) if assets_path.exists() else pd.DataFrame()
-    return team_season, team_game, team_assets
+    return team_season, team_game, games, team_assets
 
 
 @st.cache_data(show_spinner=False)
@@ -774,12 +770,12 @@ def calculate_checkpoint_metrics(team_game, seasons):
     return checkpoint_metrics
 
 
-def prepare_super_square_metrics(team_season, team_game):
+def prepare_super_square_metrics(team_season, team_game, eligible_seasons=None):
     seasons = sorted(
         [
             int(season)
             for season in team_game["season"].dropna().unique()
-            if 2005 <= int(season) <= 2025
+            if 2005 <= int(season) and (eligible_seasons is None or int(season) in eligible_seasons)
         ]
     )
     regular_games = team_game[
@@ -983,12 +979,20 @@ def build_super_square_payload(file_signature):
         timings[label] = round(perf_counter() - start_time, 4)
 
     step_start = perf_counter()
-    team_season, team_game, team_assets = load_super_square_data(file_signature)
+    team_season, team_game, games, team_assets = load_super_square_data(file_signature)
     logo_lookup, name_lookup = build_team_lookups(team_assets)
     mark_timing("csv_loading", step_start)
 
     step_start = perf_counter()
-    super_square_data = prepare_super_square_metrics(team_season, team_game)
+    historical_seasons = {
+        int(season) for season in team_game["season"].dropna().unique() if 2005 <= int(season) <= 2025
+    }
+    active_season = determine_active_nfl_season()
+    active_completion = regular_season_completion_status(games, active_season)
+    eligible_seasons = set(historical_seasons)
+    if active_season > 2025 and active_completion["complete"]:
+        eligible_seasons.add(active_season)
+    super_square_data = prepare_super_square_metrics(team_season, team_game, eligible_seasons)
     mark_timing("checkpoint_metric_calculation", step_start)
 
     step_start = perf_counter()
@@ -1043,7 +1047,7 @@ def build_super_square_payload(file_signature):
         [
             int(season)
             for season in chart_df["season"].dropna().unique()
-            if 2005 <= int(season) <= 2025
+            if int(season) in eligible_seasons
         ],
         reverse=True,
     )
@@ -1066,6 +1070,8 @@ def build_super_square_payload(file_signature):
         "name_lookup": name_lookup,
         "load_messages": [],
         "build_timings": timings,
+        "active_season": active_season,
+        "active_season_completion": active_completion,
     }
 
 
@@ -1874,8 +1880,11 @@ logo_df.loc[logo_df["Inside Super Square"], "Draw Order"] = 2
 logo_df.loc[logo_df["Is Champion"], "Draw Order"] = 3
 logo_df = logo_df.sort_values("Draw Order")
 
-base_logo_width = x_span * 0.052
-base_logo_height = y_span * 0.085
+# Size against the displayed axes rather than only the observed point spread.
+# The fixed quadrant padding can be much wider than the data spread, which made
+# logos only a few pixels wide on mobile even though every team was present.
+base_logo_width = (x_max - x_min) * 0.052
+base_logo_height = (y_max - y_min) * 0.072
 
 for _, row in logo_df.iterrows():
     is_champion = bool(row["Is Champion"])
@@ -1891,17 +1900,23 @@ for _, row in logo_df.iterrows():
             size_boost = 1.14
         elif row["On the Cusp"]:
             grayscale = False
-            opacity = 0.70
+            opacity = 0.85
             size_boost = 0.98
         else:
-            grayscale = True
-            opacity = 0.25
-            size_boost = 0.86
+            grayscale = False
+            opacity = 0.68
+            size_boost = 0.92
 
     if row["Team"] == "DEN":
         size_boost *= 1.10
 
     logo_source = logo_url_to_data_uri(row["Logo URL"], grayscale=grayscale)
+
+    # Plotly can let the visitor's browser load the public logo directly when
+    # the Streamlit host cannot reach the CDN. Without this fallback a network-
+    # restricted deployment silently drops every remote logo from the chart.
+    if not logo_source and isinstance(row["Logo URL"], str):
+        logo_source = row["Logo URL"].strip()
 
     if not logo_source:
         continue
