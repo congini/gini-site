@@ -1,8 +1,8 @@
 {
   "refresh_pipeline_version": 4,
-  "pipeline_attempt_time": "2026-09-15T09:21:15.462229-04:00",
-  "refresh_time": "2026-09-15T09:21:15.462229-04:00",
-  "last_successful_refresh_time": "2026-09-15T09:21:37.573174-04:00",
+  "pipeline_attempt_time": "2026-09-15T10:25:19.098238-04:00",
+  "refresh_time": "2026-09-15T10:25:19.098238-04:00",
+  "last_successful_refresh_time": "2026-09-15T10:25:26.439651-04:00",
   "ok": true,
   "complete": true,
   "attempted": true,
@@ -10,7 +10,7 @@
   "selected_season": 2026,
   "current_season": 2026,
   "reason": "Manual refresh forced.",
-  "message": "Authoritative 2026 refresh succeeded through Week 1 (16 completed regular-season games; 2756 PBP rows). Updated live source CSVs: weekly_rosters.csv, player_season_stats.csv, player_prior_season_stats.csv, players.csv, snap_counts.csv, injuries.csv, draft_picks.csv, depth_charts.csv, schedules.csv, teams.csv. Source errors: contracts: PermissionError: [WinError 5] Access is denied: 'C:\\\\Users\\\\cmang\\\\Desktop\\\\nfl_estat_dashboard_project\\\\data\\\\live_sources\\\\contracts.csv.tmp' -> 'C:\\\\Users\\\\cmang\\\\Desktop\\\\nfl_estat_dashboard_project\\\\data\\\\live_sources\\\\contracts.csv'.",
+  "message": "Authoritative 2026 refresh succeeded through Week 1 (16 completed regular-season games; 2756 PBP rows). Updated live source CSVs: weekly_rosters.csv, player_season_stats.csv, player_prior_season_stats.csv, players.csv, snap_counts.csv, injuries.csv, draft_picks.csv, contracts.csv, depth_charts.csv, schedules.csv, teams.csv.",
   "daily_refresh_due_time": "2026-09-14T23:59:00-04:00",
   "next_daily_refresh_due_time": "2026-09-15T23:59:00-04:00",
   "steps": {
@@ -46,7 +46,7 @@
     },
     "live_roster_context_refresh": {
       "ok": true,
-      "message": "Updated live source CSVs: weekly_rosters.csv, player_season_stats.csv, player_prior_season_stats.csv, players.csv, snap_counts.csv, injuries.csv, draft_picks.csv, depth_charts.csv, schedules.csv, teams.csv. Source errors: contracts: PermissionError: [WinError 5] Access is denied: 'C:\\\\Users\\\\cmang\\\\Desktop\\\\nfl_estat_dashboard_project\\\\data\\\\live_sources\\\\contracts.csv.tmp' -> 'C:\\\\Users\\\\cmang\\\\Desktop\\\\nfl_estat_dashboard_project\\\\data\\\\live_sources\\\\contracts.csv'."
+      "message": "Updated live source CSVs: weekly_rosters.csv, player_season_stats.csv, player_prior_season_stats.csv, players.csv, snap_counts.csv, injuries.csv, draft_picks.csv, contracts.csv, depth_charts.csv, schedules.csv, teams.csv."
     },
     "live_leaderboard_recalculation": {
       "ok": true,
@@ -61,116 +61,110 @@
     "weekly_rosters": {
       "ok": true,
       "file": "weekly_rosters.csv",
-      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\weekly_rosters.csv",
+      "path": "/home/runner/work/gini-site/gini-site/data/live_sources/weekly_rosters.csv",
       "rows": 5450,
       "season": 2026,
-      "modified_time": "2026-09-15T09:21:18.284099-04:00",
+      "modified_time": "2026-09-15T10:25:21.271485-04:00",
       "error": "",
       "attempts": []
     },
     "player_season_stats": {
       "ok": true,
       "file": "player_season_stats.csv",
-      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\player_season_stats.csv",
+      "path": "/home/runner/work/gini-site/gini-site/data/live_sources/player_season_stats.csv",
       "rows": 1118,
       "season": 2026,
-      "modified_time": "2026-09-15T09:21:18.658849-04:00",
+      "modified_time": "2026-09-15T10:25:21.433484-04:00",
       "error": "",
       "attempts": []
     },
     "player_prior_season_stats": {
       "ok": true,
       "file": "player_prior_season_stats.csv",
-      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\player_prior_season_stats.csv",
+      "path": "/home/runner/work/gini-site/gini-site/data/live_sources/player_prior_season_stats.csv",
       "rows": 2020,
       "season": 2025,
-      "modified_time": "2026-09-15T09:21:18.977865-04:00",
+      "modified_time": "2026-09-15T10:25:21.688483-04:00",
       "error": "",
       "attempts": []
     },
     "players": {
       "ok": true,
       "file": "players.csv",
-      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\players.csv",
+      "path": "/home/runner/work/gini-site/gini-site/data/live_sources/players.csv",
       "rows": 24823,
       "season": null,
-      "modified_time": "2026-09-15T09:21:19.687399-04:00",
+      "modified_time": "2026-09-15T10:25:22.122480-04:00",
       "error": "",
       "attempts": []
     },
     "player_snap_counts": {
       "ok": true,
       "file": "snap_counts.csv",
-      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\snap_counts.csv",
+      "path": "/home/runner/work/gini-site/gini-site/data/live_sources/snap_counts.csv",
       "rows": 1492,
       "season": 2026,
-      "modified_time": "2026-09-15T09:21:20.102642-04:00",
+      "modified_time": "2026-09-15T10:25:22.397478-04:00",
       "error": "",
       "attempts": []
     },
     "injuries": {
       "ok": true,
       "file": "injuries.csv",
-      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\injuries.csv",
+      "path": "/home/runner/work/gini-site/gini-site/data/live_sources/injuries.csv",
       "rows": 182,
       "season": 2026,
-      "modified_time": "2026-09-15T09:21:20.268712-04:00",
+      "modified_time": "2026-09-15T10:25:22.535477-04:00",
       "error": "",
       "attempts": []
     },
     "draft_picks": {
       "ok": true,
       "file": "draft_picks.csv",
-      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\draft_picks.csv",
+      "path": "/home/runner/work/gini-site/gini-site/data/live_sources/draft_picks.csv",
       "rows": 257,
       "season": 2026,
-      "modified_time": "2026-09-15T09:21:20.430819-04:00",
+      "modified_time": "2026-09-15T10:25:22.705477-04:00",
       "error": "",
       "attempts": []
     },
     "contracts": {
-      "ok": false,
+      "ok": true,
       "file": "contracts.csv",
-      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\contracts.csv",
-      "rows": 0,
+      "path": "/home/runner/work/gini-site/gini-site/data/live_sources/contracts.csv",
+      "rows": 2465,
       "season": null,
-      "modified_time": "",
-      "error": "PermissionError: [WinError 5] Access is denied: 'C:\\\\Users\\\\cmang\\\\Desktop\\\\nfl_estat_dashboard_project\\\\data\\\\live_sources\\\\contracts.csv.tmp' -> 'C:\\\\Users\\\\cmang\\\\Desktop\\\\nfl_estat_dashboard_project\\\\data\\\\live_sources\\\\contracts.csv'",
-      "attempts": [
-        {
-          "season": null,
-          "ok": false,
-          "error": "PermissionError: [WinError 5] Access is denied: 'C:\\\\Users\\\\cmang\\\\Desktop\\\\nfl_estat_dashboard_project\\\\data\\\\live_sources\\\\contracts.csv.tmp' -> 'C:\\\\Users\\\\cmang\\\\Desktop\\\\nfl_estat_dashboard_project\\\\data\\\\live_sources\\\\contracts.csv'"
-        }
-      ]
+      "modified_time": "2026-09-15T10:25:24.675464-04:00",
+      "error": "",
+      "attempts": []
     },
     "depth_charts": {
       "ok": true,
       "file": "depth_charts.csv",
-      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\depth_charts.csv",
+      "path": "/home/runner/work/gini-site/gini-site/data/live_sources/depth_charts.csv",
       "rows": 520792,
       "season": 2026,
-      "modified_time": "2026-09-15T09:21:37.398444-04:00",
+      "modified_time": "2026-09-15T10:25:26.005456-04:00",
       "error": "",
       "attempts": []
     },
     "schedules": {
       "ok": true,
       "file": "schedules.csv",
-      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\schedules.csv",
+      "path": "/home/runner/work/gini-site/gini-site/data/live_sources/schedules.csv",
       "rows": 272,
       "season": 2026,
-      "modified_time": "2026-09-15T09:21:37.416842-04:00",
+      "modified_time": "2026-09-15T10:25:26.235454-04:00",
       "error": "",
       "attempts": []
     },
     "teams": {
       "ok": true,
       "file": "teams.csv",
-      "path": "C:\\Users\\cmang\\Desktop\\nfl_estat_dashboard_project\\data\\live_sources\\teams.csv",
+      "path": "/home/runner/work/gini-site/gini-site/data/live_sources/teams.csv",
       "rows": 36,
       "season": null,
-      "modified_time": "2026-09-15T09:21:37.571099-04:00",
+      "modified_time": "2026-09-15T10:25:26.438453-04:00",
       "error": "",
       "attempts": []
     }
