@@ -16,5 +16,9 @@ def test_keep_awake_workflow_visits_the_deployed_app_within_11_hours():
     assert "https://gini-site.streamlit.app/" in workflow
     assert "contents: read" in workflow
     assert "playwright-core" in workflow
+    assert "runs-on: ubuntu-24.04" in workflow
+    assert "actions/checkout@v5" in workflow
     assert "get this app back up" in visitor
+    assert '.waitFor({ state: "visible", timeout: 30_000 })' in visitor
+    assert "isVisible({ timeout:" not in visitor
     assert "page.waitForTimeout(30_000)" in visitor

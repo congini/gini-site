@@ -27,14 +27,24 @@ try {
     name: /get this app back up/i,
   });
 
-  if (await wakeButton.isVisible({ timeout: 5_000 }).catch(() => false)) {
+  // isVisible() returns immediately and ignores its timeout option. Streamlit's
+  // sleep page hydrates the wake button asynchronously, so explicitly wait for
+  // it instead of racing the page render.
+  const wakeButtonAppeared = await wakeButton
+    .waitFor({ state: "visible", timeout: 30_000 })
+    .then(() => true)
+    .catch(() => false);
+
+  if (wakeButtonAppeared) {
     console.log("The app was asleep; requesting a wake-up.");
-    await wakeButton.click();
+    await wakeButton.click({ timeout: 30_000 });
     await page.waitForFunction(
       () => !/this app has gone to sleep/i.test(document.body.innerText),
       undefined,
-      { timeout: 120_000 },
+      { timeout: 180_000 },
     );
+  } else {
+    console.log("No sleep-page wake button appeared; verifying the running app.");
   }
 
   // Keep a real browser session open long enough for Streamlit's frontend to

@@ -16,10 +16,12 @@ concurrency:
 
 jobs:
   visit:
-    runs-on: ubuntu-latest
+    # Pin the runner image so an ubuntu-latest migration cannot change the
+    # browser environment unexpectedly.
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install lightweight browser automation
         run: npm install --no-save --ignore-scripts playwright-core
