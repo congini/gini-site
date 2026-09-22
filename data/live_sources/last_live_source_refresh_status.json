@@ -1,8 +1,8 @@
 {
   "refresh_pipeline_version": 4,
-  "pipeline_attempt_time": "2026-09-22T08:38:00.701877-04:00",
-  "refresh_time": "2026-09-22T08:38:00.701877-04:00",
-  "last_successful_refresh_time": "2026-09-22T08:38:07.320945-04:00",
+  "pipeline_attempt_time": "2026-09-22T10:17:58.064055-04:00",
+  "refresh_time": "2026-09-22T10:17:58.064055-04:00",
+  "last_successful_refresh_time": "2026-09-22T10:18:03.300527-04:00",
   "ok": true,
   "complete": true,
   "attempted": true,
@@ -62,9 +62,9 @@
       "ok": true,
       "file": "weekly_rosters.csv",
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/weekly_rosters.csv",
-      "rows": 5491,
+      "rows": 8001,
       "season": 2026,
-      "modified_time": "2026-09-22T08:38:02.361751-04:00",
+      "modified_time": "2026-09-22T10:17:59.245064-04:00",
       "error": "",
       "attempts": []
     },
@@ -74,7 +74,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/player_season_stats.csv",
       "rows": 2225,
       "season": 2026,
-      "modified_time": "2026-09-22T08:38:02.444751-04:00",
+      "modified_time": "2026-09-22T10:17:59.410068-04:00",
       "error": "",
       "attempts": []
     },
@@ -84,7 +84,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/player_prior_season_stats.csv",
       "rows": 2020,
       "season": 2025,
-      "modified_time": "2026-09-22T08:38:02.602752-04:00",
+      "modified_time": "2026-09-22T10:17:59.618072-04:00",
       "error": "",
       "attempts": []
     },
@@ -94,7 +94,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/players.csv",
       "rows": 24830,
       "season": null,
-      "modified_time": "2026-09-22T08:38:03.059755-04:00",
+      "modified_time": "2026-09-22T10:17:59.926078-04:00",
       "error": "",
       "attempts": []
     },
@@ -104,7 +104,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/snap_counts.csv",
       "rows": 2994,
       "season": 2026,
-      "modified_time": "2026-09-22T08:38:03.152755-04:00",
+      "modified_time": "2026-09-22T10:18:00.048080-04:00",
       "error": "",
       "attempts": []
     },
@@ -114,7 +114,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/injuries.csv",
       "rows": 433,
       "season": 2026,
-      "modified_time": "2026-09-22T08:38:03.260756-04:00",
+      "modified_time": "2026-09-22T10:18:00.190083-04:00",
       "error": "",
       "attempts": []
     },
@@ -124,7 +124,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/draft_picks.csv",
       "rows": 257,
       "season": 2026,
-      "modified_time": "2026-09-22T08:38:03.294756-04:00",
+      "modified_time": "2026-09-22T10:18:00.324085-04:00",
       "error": "",
       "attempts": []
     },
@@ -134,7 +134,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/contracts.csv",
       "rows": 2485,
       "season": null,
-      "modified_time": "2026-09-22T08:38:05.731770-04:00",
+      "modified_time": "2026-09-22T10:18:01.924116-04:00",
       "error": "",
       "attempts": []
     },
@@ -144,7 +144,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/depth_charts.csv",
       "rows": 549674,
       "season": 2026,
-      "modified_time": "2026-09-22T08:38:07.172779-04:00",
+      "modified_time": "2026-09-22T10:18:02.905135-04:00",
       "error": "",
       "attempts": []
     },
@@ -154,7 +154,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/schedules.csv",
       "rows": 272,
       "season": 2026,
-      "modified_time": "2026-09-22T08:38:07.193779-04:00",
+      "modified_time": "2026-09-22T10:18:03.123139-04:00",
       "error": "",
       "attempts": []
     },
@@ -164,7 +164,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/teams.csv",
       "rows": 36,
       "season": null,
-      "modified_time": "2026-09-22T08:38:07.319781-04:00",
+      "modified_time": "2026-09-22T10:18:03.299143-04:00",
       "error": "",
       "attempts": []
     }
