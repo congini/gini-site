@@ -9,6 +9,10 @@ import pandas as pd
 
 import gini_metrics
 import live_roster_scoring
+from snapshot_live_leaderboard import (
+    latest_completed_regular_season_key,
+    replace_weekly_snapshot,
+)
 import live_source_refresh
 import refresh_current_season
 from season_utils import (
@@ -17,8 +21,10 @@ from season_utils import (
     completed_regular_season_games,
     current_projected_finish,
     current_win_pace,
+    is_prior_snapshot_period,
     regular_season_completion_status,
     select_live_performance_population,
+    weekly_rank_change,
 )
 
 
@@ -305,6 +311,59 @@ def test_weekly_rank_movement_requires_the_same_team_population():
 
     assert comparable_ranked_populations(current, compatible) is True
     assert comparable_ranked_populations(current, incompatible) is False
+
+
+def test_weekly_rank_movement_uses_the_previous_week_rank():
+    assert weekly_rank_change(21, 16) == 5
+    assert weekly_rank_change(8, 11) == -3
+    assert weekly_rank_change(12, 12) == 0
+
+
+def test_weekly_movement_baseline_excludes_the_current_period():
+    current = (2026, 2, 2, "0000-00-00")
+    assert is_prior_snapshot_period((2026, 2, 1, "0000-00-00"), current) is True
+    assert is_prior_snapshot_period(current, current) is False
+
+
+def test_latest_completed_regular_season_key_ignores_unplayed_and_postseason_games():
+    games = pd.DataFrame(
+        [
+            {"season": 2026, "week": 1, "game_type": "REG", "home_score": 24, "away_score": 17},
+            {"season": 2026, "week": 2, "game_type": "REG", "home_score": 20, "away_score": 21},
+            {"season": 2026, "week": 3, "game_type": "REG", "home_score": None, "away_score": None},
+            {"season": 2026, "week": 20, "game_type": "POST", "home_score": 30, "away_score": 27},
+        ]
+    )
+
+    assert latest_completed_regular_season_key(games) == "2026-Week-02"
+
+
+def test_replace_weekly_snapshot_removes_a_premature_baseline():
+    history = pd.DataFrame(
+        [
+            {"snapshot_week": "2026-Week-01", "team": "DEN", "live_rank": 5},
+            {"snapshot_week": "2026-Offseason", "team": "DEN", "live_rank": 7},
+        ]
+    )
+    corrected = pd.DataFrame(
+        [
+            {"team": "DEN", "live_rank": 27, "live_market_score": 74.2},
+            {"team": "SEA", "live_rank": 1, "live_market_score": 98.0},
+        ]
+    )
+
+    result = replace_weekly_snapshot(
+        history,
+        corrected,
+        "2026-Week-01",
+        "2026-09-15T06:00:00-04:00",
+    )
+
+    week_one = result[result["snapshot_week"].eq("2026-Week-01")]
+    assert week_one[["team", "live_rank"]].to_dict("records") == [
+        {"team": "DEN", "live_rank": 27},
+        {"team": "SEA", "live_rank": 1},
+    ]
 
 
 def test_weekly_roster_snapshots_are_deduplicated_and_departed_players_removed():

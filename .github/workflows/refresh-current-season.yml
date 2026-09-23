@@ -34,6 +34,7 @@ jobs:
 
       - name: Refresh and validate current season
         run: |
+          python snapshot_live_leaderboard.py
           python update_live_sources.py --force
           python refresh_current_season.py --validate-only
           python -m pytest -q
@@ -45,6 +46,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/team_game_estat.csv data/team_season_estat.csv data/games_2005_onward.csv
+          git add data/live_leaderboard_weekly_history.csv
           git add data/live_sources/*.csv data/live_sources/last_live_source_refresh.txt data/live_sources/last_live_source_refresh_status.json
           if git diff --cached --quiet; then
             echo "No validated data changes to commit."

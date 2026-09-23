@@ -237,3 +237,17 @@ def comparable_ranked_populations(current, previous):
     current_teams = set(current["team"].dropna().map(normalize_team))
     previous_teams = set(previous["team"].dropna().map(normalize_team))
     return bool(current_teams) and current_teams == previous_teams
+
+
+def weekly_rank_change(previous_rank, current_rank):
+    """Return week-over-week rank movement; positive values mean moving up."""
+    previous = pd.to_numeric(previous_rank, errors="coerce")
+    current = pd.to_numeric(current_rank, errors="coerce")
+    return previous - current
+
+
+def is_prior_snapshot_period(snapshot_sort_key, current_sort_key):
+    """Return whether a snapshot belongs to a period before the current one."""
+    if snapshot_sort_key is None or current_sort_key is None:
+        return False
+    return snapshot_sort_key < current_sort_key
