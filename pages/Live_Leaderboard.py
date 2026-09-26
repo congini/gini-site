@@ -1011,7 +1011,7 @@ def movement_arrow_svg(direction, class_name="movement-arrow"):
         path = '<path d="M5 12h14"/>'
         label = "No rank change"
     return (
-        f'<svg class="{class_name}" viewBox="0 0 24 24" fill="none" '
+        f'<svg class="{class_name} movement-arrow-{direction}" viewBox="0 0 24 24" fill="none" '
         f'stroke="currentColor" stroke-width="2.6" stroke-linecap="round" '
         f'stroke-linejoin="round" role="img" aria-label="{label}">{path}</svg>'
     )
@@ -2955,7 +2955,7 @@ html, body {{
 
             <div class="status-card">
                 <div class="status-label">Week / Ranked</div>
-                <div class="status-value">{escape(weekly_snapshot_period)} · {len(leaderboard)} teams</div>
+                <div class="status-value">{escape(weekly_snapshot_period)}</div>
             </div>
 
         </div>
@@ -3030,7 +3030,7 @@ def render_leaderboard(leaderboard):
 </div>
 """
         )
-    st.markdown(f'<div class="section-heading">Current Leaderboard · {len(leaderboard)} teams with a completed game</div><div class="leaderboard-wrap">{"".join(rows)}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="section-heading">Current Leaderboard</div><div class="leaderboard-wrap">{"".join(rows)}</div>', unsafe_allow_html=True)
 
 
 def mover_card(row, reason):
@@ -3504,6 +3504,12 @@ def render_css():
 .movement-rank{{display:inline-flex;align-items:center;gap:.24rem;white-space:nowrap;}}
 .movement-arrow,.mover-arrow{{display:block;width:15px;height:15px;flex:0 0 15px;}}
 .mover-arrow{{width:14px;height:14px;flex-basis:14px;}}
+.movement-arrow-up,.movement-arrow-up path{{color:#15803D;stroke:#15803D;}}
+.movement-arrow-down,.movement-arrow-down path{{color:#DC2626;stroke:#DC2626;}}
+.movement-arrow-flat,.movement-arrow-flat path{{color:#64748B;stroke:#64748B;}}
+.movement-indicator .movement-arrow-up,.movement-indicator .movement-arrow-up path,
+.movement-indicator .movement-arrow-down,.movement-indicator .movement-arrow-down path,
+.movement-indicator .movement-arrow-flat,.movement-indicator .movement-arrow-flat path{{color:#FFFFFF;stroke:#FFFFFF;}}
 .movement-flat-mark{{display:block;min-width:15px;text-align:center;color:#64748B;font-size:1rem;line-height:1;font-weight:950;}}
 .move-up b{{color:#15803D;}}.move-down b{{color:#DC2626;}}.move-flat b{{color:#475569;}}
 .status-pill{{justify-self:start;display:inline-flex;align-items:center;justify-content:center;min-height:30px;padding:.35rem .62rem;border-radius:999px;background:rgba(15,23,42,.06);color:{TEXT};font-size:.78rem;font-weight:950;white-space:nowrap;}}
