@@ -5,6 +5,7 @@ import base64
 import html
 import importlib
 import json
+import os
 import sys
 
 import numpy as np
@@ -33,7 +34,9 @@ except ImportError:
 APP_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = APP_DIR / "data"
 LIVE_SOURCES_DIR = DATA_DIR / "live_sources"
-SNAPSHOT_PATH = DATA_DIR / "live_leaderboard_snapshot.csv"
+SNAPSHOT_PATH = Path(
+    os.getenv("LIVE_LEADERBOARD_SNAPSHOT_PATH", DATA_DIR / "live_leaderboard_snapshot.csv")
+)
 WEEKLY_HISTORY_PATH = DATA_DIR / "live_leaderboard_weekly_history.csv"
 LIVE_SOURCE_REFRESH_LOG_PATH = DATA_DIR / "live_sources" / "last_live_source_refresh.txt"
 LIVE_SOURCE_REFRESH_STATUS_PATH = DATA_DIR / "live_sources" / "last_live_source_refresh_status.json"
@@ -53,7 +56,12 @@ from live_source_refresh import (
     record_model_recalculation,
     refresh_live_sources_if_needed as run_live_source_refresh_if_needed,
 )
-from season_utils import comparable_ranked_populations, select_live_performance_population
+from season_utils import (
+    comparable_ranked_populations,
+    is_prior_snapshot_period,
+    select_live_performance_population,
+    weekly_rank_change,
+)
 import live_roster_scoring as roster_scoring
 
 
@@ -1884,16 +1892,17 @@ def calculate_weekly_movement(leaderboard, weekly_snapshot):
     output = output.merge(previous, on="team", how="left")
     output["previous_week_rank"] = pd.to_numeric(output["previous_week_rank"], errors="coerce").fillna(output["live_rank"])
     output["previous_week_score"] = pd.to_numeric(output["previous_week_score"], errors="coerce").fillna(output["live_market_score"])
-    output["weekly_rank_change"] = pd.to_numeric(output["previous_week_rank"], errors="coerce") - pd.to_numeric(output["live_rank"], errors="coerce")
+    output["weekly_rank_change"] = weekly_rank_change(
+        output["previous_week_rank"],
+        output["live_rank"],
+    )
     output["weekly_score_change"] = pd.to_numeric(output["live_market_score"], errors="coerce") - pd.to_numeric(output["previous_week_score"], errors="coerce")
     output["weekly_movement_arrow"] = np.select(
         [
             output["weekly_rank_change"] > 0,
             output["weekly_rank_change"] < 0,
-            output["weekly_score_change"] > 0.05,
-            output["weekly_score_change"] < -0.05,
         ],
-        ["\u2191", "\u2193", "\u2191", "\u2193"],
+        ["\u2191", "\u2193"],
         default="\u2192",
     )
     output["previous_rank"] = output["previous_week_rank"]
@@ -1909,6 +1918,9 @@ def calculate_rank_movement(leaderboard, previous_snapshot):
 
 
 def should_save_daily_snapshot():
+    if os.getenv("LIVE_LEADERBOARD_FORCE_SNAPSHOT") == "1":
+        return True
+
     current_time = now_et()
     latest_due = latest_daily_reload_due_time(current_time)
     if current_time - latest_due > timedelta(hours=1):
@@ -2238,7 +2250,11 @@ def get_latest_weekly_movement_snapshot(current_week):
     history = history.copy()
     history["_snapshot_sort_key"] = history["snapshot_week"].apply(snapshot_period_sort_key)
     history = history[history["_snapshot_sort_key"].notna()].copy()
-    candidates = history[history["_snapshot_sort_key"].apply(lambda sort_key: sort_key <= current_sort_key)].copy()
+    candidates = history[
+        history["_snapshot_sort_key"].apply(
+            lambda sort_key: is_prior_snapshot_period(sort_key, current_sort_key)
+        )
+    ].copy()
 
     if candidates.empty:
         return pd.DataFrame(), False
@@ -2356,12 +2372,7 @@ def generate_movement_reason(row, has_snapshot):
     return "Current profile improved versus the weekly baseline"
 
 
-def render_live_status_strip(selected_season, weekly_snapshot_period, static_time, leaderboard, has_snapshot=True):
-    fallback = format_et_timestamp(static_time, include_seconds=True)
-    fallback_dt = static_time.replace(tzinfo=ET) if static_time.tzinfo is None else static_time.astimezone(ET)
-    next_refresh_fallback_dt = next_daily_reload_time(fallback_dt)
-    next_refresh_fallback = next_refresh_fallback_dt.strftime("%I:%M %p").lstrip("0") + " ET"
-
+def render_live_status_strip(selected_season, weekly_snapshot_period, leaderboard, has_snapshot=True):
     best = leaderboard.sort_values("live_rank", ascending=True).iloc[0]
     worst = leaderboard.sort_values("live_rank", ascending=False).iloc[0]
 
@@ -2391,8 +2402,8 @@ def render_live_status_strip(selected_season, weekly_snapshot_period, static_tim
     riser_change = movement_amount(riser)
     faller_change = movement_amount(faller)
 
-    riser_text = f"+{riser_change}" if riser_change else "0"
-    faller_text = f"-{faller_change}" if faller_change else "0"
+    riser_text = str(riser_change) if riser_change else "0"
+    faller_text = str(faller_change) if faller_change else "0"
     riser_label = "Riser of Week" if has_snapshot else "Movement Pending"
     faller_label = "Faller of Week" if has_snapshot else "Movement Pending"
     movement_unit = "spots" if has_snapshot else "no baseline"
@@ -2496,7 +2507,7 @@ html, body {{
 /* ── Card row ── */
 .status-strip {{
     display:grid;
-    grid-template-columns:minmax(500px, .92fr) minmax(650px, 1.08fr);
+    grid-template-columns:minmax(0, 1fr) minmax(0, 2fr);
     gap:1rem;
     align-items:stretch;
     padding:.85rem 1.55rem 1.35rem;
@@ -2504,7 +2515,7 @@ html, body {{
 
 .status-left {{
     display:grid;
-    grid-template-columns:140px 140px minmax(250px, 1fr);
+    grid-template-columns:repeat(2, minmax(0, 1fr));
     gap:.72rem;
     align-items:stretch;
 }}
@@ -2537,10 +2548,6 @@ html, body {{
     backdrop-filter:blur(16px);
 }}
 
-.status-live {{
-    align-items:flex-start;
-}}
-
 .status-label {{
     color:rgba(255,255,255,.66);
     font-size:.64rem;
@@ -2556,42 +2563,6 @@ html, body {{
     font-weight:850;
     line-height:1.12;
     letter-spacing:-.01em;
-}}
-
-.live-time-row {{
-    display:flex;
-    align-items:center;
-    flex-wrap:wrap;
-    gap:.5rem;
-    box-sizing:border-box;
-    width:100%;
-    max-width:100%;
-    min-width:0;
-}}
-
-.live-clock-pill,
-.next-refresh-pill {{
-    display:inline-flex;
-    align-items:center;
-    box-sizing:border-box;
-    max-width:100%;
-    min-width:0;
-    min-height:32px;
-    padding:0 .86rem;
-    border-radius:999px;
-    color:#FFFFFF;
-    background:rgba(255,255,255,.14);
-    border:1px solid rgba(255,255,255,.24);
-    box-shadow:0 10px 22px rgba(0,0,0,.16);
-    white-space:normal;
-    overflow-wrap:anywhere;
-    font-size:clamp(.78rem, 1.4vw, .88rem);
-    font-weight:850;
-}}
-
-.next-refresh-pill {{
-    background:linear-gradient(135deg, rgba(241,90,36,.24), rgba(0,115,183,.18));
-    border-color:rgba(255,255,255,.28);
 }}
 
 /* ── Broadcast-style headline cards ── */
@@ -2801,7 +2772,7 @@ html, body {{
     }}
 
     .status-left {{
-        grid-template-columns:140px 140px minmax(220px,1fr);
+        grid-template-columns:repeat(2, minmax(0, 1fr));
     }}
 }}
 
@@ -2828,11 +2799,6 @@ html, body {{
         grid-template-columns:1fr 1fr;
     }}
 
-    .live-clock-pill,
-    .next-refresh-pill {{
-        flex:1 1 100%;
-        justify-content:center;
-    }}
 }}
 </style>
 
@@ -2857,13 +2823,6 @@ html, body {{
                 <div class="status-value">{escape(weekly_snapshot_period)} · {len(leaderboard)} teams</div>
             </div>
 
-            <div class="status-card status-live">
-                <div class="status-label">Last Page Load</div>
-                <div class="live-time-row">
-                    <div id="live-clock-text" class="status-value live-clock-pill">{escape(fallback)}</div>
-                    <div id="next-refresh-text" class="status-value next-refresh-pill">Next Refresh: {escape(next_refresh_fallback)}</div>
-                </div>
-            </div>
         </div>
 
         <div class="status-right">
@@ -2886,7 +2845,7 @@ html, body {{
                 <div class="headline-logo-wrap">{logo_html(riser["team"], riser.get("team_logo", ""), "headline-logo")}</div>
                 <div class="headline-team">{escape(riser["team_name"])}</div>
                 <div class="movement-indicator movement-up">
-                    <span class="movement-icon">↗</span>
+                    <span class="movement-icon">↑</span>
                     <span class="movement-value">{escape(riser_text)}</span>
                     <span class="movement-label">{escape(movement_unit)}</span>
                 </div>
@@ -2897,7 +2856,7 @@ html, body {{
                 <div class="headline-logo-wrap">{logo_html(faller["team"], faller.get("team_logo", ""), "headline-logo")}</div>
                 <div class="headline-team">{escape(faller["team_name"])}</div>
                 <div class="movement-indicator movement-down">
-                    <span class="movement-icon">↘</span>
+                    <span class="movement-icon">↓</span>
                     <span class="movement-value">{escape(faller_text)}</span>
                     <span class="movement-label">{escape(movement_unit)}</span>
                 </div>
@@ -2905,64 +2864,6 @@ html, body {{
         </div>
     </div>
 </div>
-
-<script>
-(function() {{
-  const clockTarget = document.getElementById("live-clock-text");
-  const refreshTarget = document.getElementById("next-refresh-text");
-  if (!clockTarget || !refreshTarget) {{
-    return;
-  }}
-
-  function updateClock() {{
-    clockTarget.textContent = "{escape(fallback)}";
-    refreshTarget.textContent = "Next Refresh: {escape(next_refresh_fallback)}";
-    return;
-    try {{
-      const now = new Date();
-
-      const dateText = new Intl.DateTimeFormat("en-US", {{
-        timeZone:"America/New_York",
-        month:"short",
-        day:"numeric",
-        year:"numeric"
-      }}).format(now);
-
-      const timeText = new Intl.DateTimeFormat("en-US", {{
-        timeZone:"America/New_York",
-        hour:"numeric",
-        minute:"2-digit",
-        second:"2-digit",
-        hour12:true
-      }}).format(now);
-
-      const easternParts = new Intl.DateTimeFormat("en-US", {{
-        timeZone:"America/New_York",
-        year:"numeric",
-        month:"numeric",
-        day:"numeric",
-        hour:"2-digit",
-        minute:"numeric",
-        second:"numeric",
-        hourCycle:"h23"
-      }}).formatToParts(now).reduce(function(parts, part) {{
-        parts[part.type] = part.value;
-        return parts;
-      }}, {{}});
-
-      const refreshText = "11:59 PM";
-
-      clockTarget.textContent = dateText + " | " + timeText + " ET";
-      refreshTarget.textContent = "Next Refresh: " + refreshText + " ET";
-    }} catch (err) {{
-      clockTarget.textContent = "{escape(fallback)}";
-      refreshTarget.textContent = "Next Refresh: {escape(next_refresh_fallback)}";
-    }}
-  }}
-
-  updateClock();
-}})();
-</script>
 """,
         height=375,
         scrolling=False,
@@ -3842,7 +3743,6 @@ render_start = perf_counter()
 render_live_status_strip(
     selected_season,
     weekly_snapshot_period,
-    now_et(),
     leaderboard,
     has_snapshot,
 )
@@ -3855,15 +3755,6 @@ render_leaderboard(leaderboard)
 render_biggest_movers(leaderboard, has_snapshot)
 st.markdown('<div class="section-heading">Team Detail</div>', unsafe_allow_html=True)
 render_team_detail(leaderboard, production_found)
-render_roster_tracker_plan(
-    roster_file,
-    load_time,
-    future_status,
-    production_found,
-    SNAPSHOT_PATH.exists(),
-    live_source_refresh_ok=live_source_refresh_ok,
-    live_source_refresh_message=live_source_refresh_message,
-)
 # render_free_data_source_plan(performance_season, nflreadpy_available)
 st.markdown("</div>", unsafe_allow_html=True)
 print(f"Live Leaderboard render timing: {round(perf_counter() - render_start, 4)}s")
