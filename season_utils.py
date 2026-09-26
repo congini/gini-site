@@ -195,6 +195,62 @@ def current_projected_finish(wins, ties, games_played, preseason_projected_wins,
     return min(total_games, earned_wins + remaining_games * preseason_win_rate)
 
 
+def current_projected_finish_table(preseason_projections, records, season):
+    """Return team-level current finishes using the predictive model's policy.
+
+    ``preseason_projections`` is the frozen projection snapshot used by the
+    Predictive Model page. Completed results are banked from ``records`` and the
+    frozen preseason win rate is applied only to games remaining. Keeping this
+    transformation here gives every page one definition of current projected
+    finish.
+    """
+    columns = ["team", "preseason_projected_wins", "projected_wins"]
+    if preseason_projections is None or preseason_projections.empty:
+        return pd.DataFrame(columns=columns)
+    if not {"team", "projected_wins"}.issubset(preseason_projections.columns):
+        return pd.DataFrame(columns=columns)
+
+    projections = preseason_projections[["team", "projected_wins"]].copy()
+    projections["team"] = projections["team"].map(normalize_team)
+    projections["preseason_projected_wins"] = pd.to_numeric(
+        projections.pop("projected_wins"), errors="coerce"
+    )
+    projections = projections.dropna(subset=["team", "preseason_projected_wins"])
+    projections = projections.drop_duplicates("team", keep="last")
+
+    record_columns = ["team", "current_wins", "current_ties", "scored_games"]
+    if records is None or records.empty or "team" not in records.columns:
+        current_records = pd.DataFrame(columns=record_columns)
+    else:
+        current_records = records.copy()
+        if "season" in current_records.columns:
+            current_records = current_records[
+                pd.to_numeric(current_records["season"], errors="coerce").eq(int(season))
+            ].copy()
+        for column in record_columns:
+            if column not in current_records.columns:
+                current_records[column] = pd.NA
+        current_records = current_records[record_columns].copy()
+        current_records["team"] = current_records["team"].map(normalize_team)
+        current_records = current_records.drop_duplicates("team", keep="last")
+
+    output = projections.merge(current_records, on="team", how="left")
+
+    def calculate(row):
+        games_played = pd.to_numeric(row.get("scored_games"), errors="coerce")
+        games_played = 0.0 if pd.isna(games_played) else float(games_played)
+        return current_projected_finish(
+            row.get("current_wins"),
+            row.get("current_ties"),
+            games_played,
+            row.get("preseason_projected_wins"),
+            season,
+        )
+
+    output["projected_wins"] = output.apply(calculate, axis=1)
+    return output[columns]
+
+
 def select_live_performance_population(performance_all, selected_season, team_universe=None):
     """Select a comparable leaderboard population for the live season.
 

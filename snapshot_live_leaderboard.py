@@ -1,8 +1,8 @@
-"""Persist the final leaderboard from the most recently completed NFL week.
+"""Persist the leaderboard visible immediately before a data refresh.
 
 The scheduled refresh runs this script before replacing the source data. That
-preserves the ranking users actually saw at the end of the prior week, so the
-next leaderboard can report true week-over-week rank movement.
+preserves the ranking users actually saw before the refresh, so the next
+leaderboard can report movement from the previous visible data snapshot.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from streamlit.testing.v1 import AppTest
 APP_DIR = Path(__file__).resolve().parent
 GAMES_PATH = APP_DIR / "data" / "games_2005_onward.csv"
 WEEKLY_HISTORY_PATH = APP_DIR / "data" / "live_leaderboard_weekly_history.csv"
+REFRESH_BASELINE_PATH = APP_DIR / "data" / "live_leaderboard_refresh_baseline.csv"
 PAGE_PATH = APP_DIR / "pages" / "Live_Leaderboard.py"
 
 
@@ -56,7 +57,7 @@ def replace_weekly_snapshot(
     snapshot_week: str,
     snapshot_timestamp: str,
 ) -> pd.DataFrame:
-    """Replace one week's baseline so reruns cannot leave duplicate or stale ranks."""
+    """Replace one period's history row without leaving duplicate ranks."""
     current = history.copy()
     if not current.empty and "snapshot_week" in current.columns:
         current = current[~current["snapshot_week"].astype(str).eq(snapshot_week)].copy()
@@ -124,6 +125,11 @@ def build_prior_week_snapshot(timeout_seconds: int = 240) -> tuple[str, int]:
         if WEEKLY_HISTORY_PATH.exists()
         else pd.DataFrame()
     )
+    baseline = snapshot.copy()
+    baseline["snapshot_week"] = snapshot_week
+    baseline["snapshot_timestamp"] = timestamp
+    REFRESH_BASELINE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    baseline.to_csv(REFRESH_BASELINE_PATH, index=False)
     updated = replace_weekly_snapshot(history, snapshot, snapshot_week, timestamp)
     WEEKLY_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
     updated.to_csv(WEEKLY_HISTORY_PATH, index=False)

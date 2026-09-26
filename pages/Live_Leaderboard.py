@@ -37,9 +37,11 @@ LIVE_SOURCES_DIR = DATA_DIR / "live_sources"
 SNAPSHOT_PATH = Path(
     os.getenv("LIVE_LEADERBOARD_SNAPSHOT_PATH", DATA_DIR / "live_leaderboard_snapshot.csv")
 )
+REFRESH_BASELINE_PATH = DATA_DIR / "live_leaderboard_refresh_baseline.csv"
 WEEKLY_HISTORY_PATH = DATA_DIR / "live_leaderboard_weekly_history.csv"
 LIVE_SOURCE_REFRESH_LOG_PATH = DATA_DIR / "live_sources" / "last_live_source_refresh.txt"
 LIVE_SOURCE_REFRESH_STATUS_PATH = DATA_DIR / "live_sources" / "last_live_source_refresh_status.json"
+PREDICTIVE_MODEL_DEBUG_LOG_PATH = LIVE_SOURCES_DIR / "predictive_model_projection_debug.json"
 DAILY_RELOAD_TIME = time(23, 59)
 WEEKLY_SNAPSHOT_CUTOFF_WEEKDAY = 1  # Tuesday, matching datetime.weekday()
 WEEKLY_SNAPSHOT_CUTOFF_TIME = time(23, 59)
@@ -58,6 +60,7 @@ from live_source_refresh import (
 )
 from season_utils import (
     comparable_ranked_populations,
+    current_projected_finish_table,
     is_prior_snapshot_period,
     select_live_performance_population,
     weekly_rank_change,
@@ -111,7 +114,7 @@ LEADERBOARD_CACHE_SIGNATURE_EXCLUDED_PATHS = {
     WEEKLY_HISTORY_PATH,
     LIVE_SOURCE_REFRESH_LOG_PATH,
     LIVE_SOURCE_REFRESH_STATUS_PATH,
-    LIVE_SOURCES_DIR / "predictive_model_projection_debug.json",
+    PREDICTIVE_MODEL_DEBUG_LOG_PATH,
 }
 
 SUPER_BOWL_WINNERS = {
@@ -530,6 +533,18 @@ def build_live_leaderboard_payload(file_signature):
         int(selected_season) - 1 if int(selected_season) - 1 in set(performance_all["season"]) else performance_season,
         int(selected_season),
     )
+    projected_wins, predictive_finish_team_count = align_projected_wins_to_predictive_model(
+        projected_wins,
+        records,
+        int(selected_season),
+    )
+    projected_meta = dict(projected_meta or {})
+    projected_meta["current_finish_source"] = (
+        "predictive_model_frozen_preseason_projection"
+        if predictive_finish_team_count
+        else "live_leaderboard_fallback_model"
+    )
+    projected_meta["current_finish_team_count"] = predictive_finish_team_count
     mark_timing("projected_wins", step_start)
 
     step_start = perf_counter()
@@ -538,7 +553,7 @@ def build_live_leaderboard_payload(file_signature):
 
     step_start = perf_counter()
     leaderboard = merge_leaderboard_scores(performance_df, selected_roster_scores, projected_wins, quadrants, team_assets, int(selected_season))
-    record_columns = ["team", "current_wins", "current_losses", "current_ties"]
+    record_columns = ["team", "current_wins", "current_losses", "current_ties", "scored_games"]
     leaderboard = leaderboard.merge(
         records[records["season"] == int(selected_season)][record_columns],
         on="team",
@@ -975,6 +990,45 @@ def logo_html(team, logo, class_name):
     if src:
         return f'<img class="{class_name}" src="{escape(src)}" alt="{escape(team)} logo">'
     return f'<div class="{class_name} logo-fallback">{escape(team)}</div>'
+
+
+def movement_direction(rank_change):
+    value = pd.to_numeric(rank_change, errors="coerce")
+    if pd.isna(value) or value == 0:
+        return "flat"
+    return "up" if value > 0 else "down"
+
+
+def movement_arrow_svg(direction, class_name="movement-arrow"):
+    """Render consistent arrows without relying on platform font glyphs."""
+    if direction == "up":
+        path = '<path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/>'
+        label = "Moved up"
+    elif direction == "down":
+        path = '<path d="M12 5v14m6.5-6.5L12 19l-6.5-6.5"/>'
+        label = "Moved down"
+    else:
+        path = '<path d="M5 12h14"/>'
+        label = "No rank change"
+    return (
+        f'<svg class="{class_name}" viewBox="0 0 24 24" fill="none" '
+        f'stroke="currentColor" stroke-width="2.6" stroke-linecap="round" '
+        f'stroke-linejoin="round" role="img" aria-label="{label}">{path}</svg>'
+    )
+
+
+def movement_rank_html(rank_change, icon_class="movement-arrow"):
+    value = pd.to_numeric(rank_change, errors="coerce")
+    amount = 0 if pd.isna(value) else abs(int(value))
+    direction = movement_direction(value)
+    if direction == "flat":
+        return '<span class="movement-rank movement-flat"><span class="movement-flat-mark">—</span></span>'
+    return (
+        f'<span class="movement-rank">'
+        f'{movement_arrow_svg(direction, icon_class)}'
+        f'<span>{amount}</span>'
+        f'</span>'
+    )
 
 
 def reconstruct_gini_score_if_needed(df):
@@ -1521,6 +1575,69 @@ def calculate_projected_wins_score(projected_wins):
 
 
 @st.cache_data(show_spinner=False)
+def load_frozen_preseason_projections(selected_season):
+    """Load the same frozen projection reference used by Predictive Model."""
+    columns = ["team", "projected_wins"]
+    if not PREDICTIVE_MODEL_DEBUG_LOG_PATH.exists():
+        return pd.DataFrame(columns=columns)
+    try:
+        payload = json.loads(PREDICTIVE_MODEL_DEBUG_LOG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return pd.DataFrame(columns=columns)
+    if int(payload.get("selected_year", 0)) != int(selected_season):
+        return pd.DataFrame(columns=columns)
+
+    projections = pd.DataFrame(payload.get("rows", []))
+    if projections.empty or not set(columns).issubset(projections.columns):
+        return pd.DataFrame(columns=columns)
+    projections = projections[columns].copy()
+    projections["team"] = projections["team"].map(normalize_team)
+    projections["projected_wins"] = pd.to_numeric(projections["projected_wins"], errors="coerce")
+    return projections.dropna(subset=columns).drop_duplicates("team", keep="last")
+
+
+def align_projected_wins_to_predictive_model(projected_wins, records, selected_season):
+    """Replace leaderboard wins with Predictive Model current finishes."""
+    frozen = load_frozen_preseason_projections(int(selected_season))
+    current = current_projected_finish_table(frozen, records, int(selected_season))
+    if projected_wins.empty or current.empty:
+        return projected_wins, 0
+
+    output = projected_wins.copy()
+    current = current.rename(columns={"projected_wins": "predictive_current_finish"})
+    output = output.merge(
+        current[["team", "preseason_projected_wins", "predictive_current_finish"]],
+        on="team",
+        how="left",
+    )
+    synced = output["predictive_current_finish"].notna()
+    if not synced.any():
+        return projected_wins, 0
+
+    original = pd.to_numeric(output["projected_wins"], errors="coerce")
+    lower = pd.to_numeric(output.get("projected_wins_low"), errors="coerce")
+    upper = pd.to_numeric(output.get("projected_wins_high"), errors="coerce")
+    lower_width = (original - lower).where(lower.notna(), 2.2).clip(lower=0)
+    upper_width = (upper - original).where(upper.notna(), 2.2).clip(lower=0)
+
+    output.loc[synced, "projected_wins"] = output.loc[synced, "predictive_current_finish"]
+    output.loc[synced, "projected_wins_low"] = (
+        output.loc[synced, "projected_wins"] - lower_width.loc[synced]
+    ).round().clip(0, 17)
+    output.loc[synced, "projected_wins_high"] = (
+        output.loc[synced, "projected_wins"] + upper_width.loc[synced]
+    ).round().clip(0, 17)
+    output["projected_wins_low"] = pd.to_numeric(output["projected_wins_low"], errors="coerce").fillna(0).astype(int)
+    output["projected_wins_high"] = pd.to_numeric(output["projected_wins_high"], errors="coerce").fillna(17).astype(int)
+    output["projected_wins_range"] = output.apply(
+        lambda row: f"Range: {row['projected_wins_low']}-{row['projected_wins_high']}",
+        axis=1,
+    )
+    output["projected_wins_score"] = output["projected_wins"].apply(calculate_projected_wins_score)
+    return output.drop(columns=["preseason_projected_wins", "predictive_current_finish"]), int(synced.sum())
+
+
+@st.cache_data(show_spinner=False)
 def calculate_projected_wins(performance_all, records, roster_scores_all, selected_roster_scores, performance_season, selected_season):
     fallback_columns = ["team", "projected_wins", "projected_wins_low", "projected_wins_high", "projected_wins_range", "projected_wins_score"]
     selected_features = performance_all[performance_all["season"] == performance_season].copy()
@@ -1857,6 +1974,23 @@ def load_previous_snapshot():
         return pd.DataFrame(), False
     snapshot, _ = safe_read_csv(SNAPSHOT_PATH)
     return snapshot, not snapshot.empty
+
+
+def load_refresh_baseline():
+    """Load the leaderboard captured immediately before the last data refresh."""
+    if not REFRESH_BASELINE_PATH.exists():
+        return pd.DataFrame(), False
+    baseline, _ = safe_read_csv(REFRESH_BASELINE_PATH)
+    required = {"season", "team", "live_rank", "live_market_score"}
+    if baseline.empty or not required.issubset(baseline.columns):
+        return pd.DataFrame(), False
+    baseline = baseline.copy()
+    baseline["team"] = baseline["team"].map(normalize_team)
+    baseline["season"] = pd.to_numeric(baseline["season"], errors="coerce")
+    baseline["live_rank"] = pd.to_numeric(baseline["live_rank"], errors="coerce")
+    baseline["live_market_score"] = pd.to_numeric(baseline["live_market_score"], errors="coerce")
+    baseline = baseline.dropna(subset=["season", "team", "live_rank", "live_market_score"])
+    return baseline, not baseline.empty
 
 
 def _set_neutral_weekly_movement(output):
@@ -2238,6 +2372,10 @@ def load_weekly_history():
 
 
 def get_latest_weekly_movement_snapshot(current_week):
+    refresh_baseline, has_refresh_baseline = load_refresh_baseline()
+    if has_refresh_baseline:
+        return refresh_baseline, True
+
     history, has_history = load_weekly_history()
 
     if not has_history or "snapshot_week" not in history.columns:
@@ -2404,6 +2542,8 @@ def render_live_status_strip(selected_season, weekly_snapshot_period, leaderboar
 
     riser_text = str(riser_change) if riser_change else "0"
     faller_text = str(faller_change) if faller_change else "0"
+    riser_icon = movement_arrow_svg("up" if riser_change else "flat", "movement-icon")
+    faller_icon = movement_arrow_svg("down" if faller_change else "flat", "movement-icon")
     riser_label = "Riser of Week" if has_snapshot else "Movement Pending"
     faller_label = "Faller of Week" if has_snapshot else "Movement Pending"
     movement_unit = "spots" if has_snapshot else "no baseline"
@@ -2730,15 +2870,10 @@ html, body {{
 }}
 
 .movement-icon {{
-    width:22px;
-    height:22px;
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    border-radius:999px;
-    background:rgba(255,255,255,.20);
-    font-size:.80rem;
-    line-height:1;
+    width:16px;
+    height:16px;
+    display:block;
+    flex:0 0 16px;
 }}
 
 .movement-value {{
@@ -2845,7 +2980,7 @@ html, body {{
                 <div class="headline-logo-wrap">{logo_html(riser["team"], riser.get("team_logo", ""), "headline-logo")}</div>
                 <div class="headline-team">{escape(riser["team_name"])}</div>
                 <div class="movement-indicator movement-up">
-                    <span class="movement-icon">↑</span>
+                    {riser_icon}
                     <span class="movement-value">{escape(riser_text)}</span>
                     <span class="movement-label">{escape(movement_unit)}</span>
                 </div>
@@ -2856,7 +2991,7 @@ html, body {{
                 <div class="headline-logo-wrap">{logo_html(faller["team"], faller.get("team_logo", ""), "headline-logo")}</div>
                 <div class="headline-team">{escape(faller["team_name"])}</div>
                 <div class="movement-indicator movement-down">
-                    <span class="movement-icon">↓</span>
+                    {faller_icon}
                     <span class="movement-value">{escape(faller_text)}</span>
                     <span class="movement-label">{escape(movement_unit)}</span>
                 </div>
@@ -2873,12 +3008,13 @@ html, body {{
 def render_leaderboard(leaderboard):
     rows = []
     for _, row in leaderboard.iterrows():
-        team, move = row["team"], row.get("movement_arrow", "\u2192")
+        team = row["team"]
         rank_change = row.get("rank_change")
-        movement_text = f"{move} {abs(int(0 if pd.isna(rank_change) else rank_change))}"
+        direction = movement_direction(rank_change)
+        movement_html = movement_rank_html(rank_change)
         score_change = row.get("score_change")
         score_text = "+0.0" if pd.isna(score_change) else f"{score_change:+.1f}"
-        move_class = "move-up" if move == "\u2191" else "move-down" if move == "\u2193" else "move-flat"
+        move_class = f"move-{direction}"
         rows.append(
             f"""
 <div class="leader-row" style="--team-primary:{escape(row.get("team_primary_color", PRIMARY))};--team-secondary:{escape(row.get("team_secondary_color", SECONDARY))};">
@@ -2889,7 +3025,7 @@ def render_leaderboard(leaderboard):
   <div class="mini-cell"><b>{number(row["roster_score"])}</b><span>Roster</span></div>
   <div class="mini-cell"><b>{number(row["projected_wins"])}</b><span>Wins</span></div>
   <div class="quad-cell"><b>{escape(str(row["most_likely_quadrant"]).replace(" - ", " "))}</b><span>{pct(row["highest_quadrant_probability"])} current profile probability</span></div>
-  <div class="move-cell {move_class}"><b>{escape(movement_text)}</b><span>{escape(score_text)}</span></div>
+  <div class="move-cell {move_class}"><b>{movement_html}</b><span>{escape(score_text)}</span></div>
   <div class="status-pill">{escape(row["status_label"])}</div>
 </div>
 """
@@ -2900,13 +3036,12 @@ def render_leaderboard(leaderboard):
 def mover_card(row, reason):
     team = row["team"]
     rank_change = row.get("rank_change")
-    move = row.get("movement_arrow", "\u2192")
-    movement_text = f"{move} {abs(int(0 if pd.isna(rank_change) else rank_change))}"
+    movement_html = movement_rank_html(rank_change, "mover-arrow")
     score_change = row.get("score_change")
     return f"""
 <div class="mover-item"><div class="row-logo-wrap small">{logo_html(team, row.get("team_logo", ""), "row-logo")}</div>
 <div class="mover-main"><div class="team-name">{escape(row["team_name"])}</div><div class="mover-reason">{escape(reason)}</div></div>
-<div class="mover-stat"><b>{escape(movement_text)}</b><span>{escape("+0.0" if pd.isna(score_change) else f"{score_change:+.1f}")}</span></div></div>
+<div class="mover-stat"><b>{movement_html}</b><span>{escape("+0.0" if pd.isna(score_change) else f"{score_change:+.1f}")}</span></div></div>
 """
 
 
@@ -3366,6 +3501,10 @@ def render_css():
 .score-value{{color:{TEXT};font-size:1.38rem;line-height:1;font-weight:950;}}
 .mini-cell b,.quad-cell b,.move-cell b{{display:block;color:{TEXT};font-size:.96rem;line-height:1.15;font-weight:950;}}
 .quad-cell b{{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}}
+.movement-rank{{display:inline-flex;align-items:center;gap:.24rem;white-space:nowrap;}}
+.movement-arrow,.mover-arrow{{display:block;width:15px;height:15px;flex:0 0 15px;}}
+.mover-arrow{{width:14px;height:14px;flex-basis:14px;}}
+.movement-flat-mark{{display:block;min-width:15px;text-align:center;color:#64748B;font-size:1rem;line-height:1;font-weight:950;}}
 .move-up b{{color:#15803D;}}.move-down b{{color:#DC2626;}}.move-flat b{{color:#475569;}}
 .status-pill{{justify-self:start;display:inline-flex;align-items:center;justify-content:center;min-height:30px;padding:.35rem .62rem;border-radius:999px;background:rgba(15,23,42,.06);color:{TEXT};font-size:.78rem;font-weight:950;white-space:nowrap;}}
 .movers-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;margin:1rem 0 1.25rem;}}

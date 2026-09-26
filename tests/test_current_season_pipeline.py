@@ -20,6 +20,7 @@ from season_utils import (
     comparable_ranked_populations,
     completed_regular_season_games,
     current_projected_finish,
+    current_projected_finish_table,
     current_win_pace,
     is_prior_snapshot_period,
     regular_season_completion_status,
@@ -71,6 +72,44 @@ def test_current_projected_finish_banks_results_without_one_game_overreaction():
     assert tied_after_one == 0.5 + 16 * preseason_projection / 17
     assert current_projected_finish(0, 0, 0, preseason_projection, 2026) == preseason_projection
     assert current_projected_finish(10, 0, 17, preseason_projection, 2026) == 10
+
+
+def test_current_projected_finish_table_matches_predictive_model_card():
+    preseason = pd.DataFrame(
+        [{"team": "DEN", "projected_wins": 9.846}]
+    )
+    records = pd.DataFrame(
+        [
+            {
+                "season": 2026,
+                "team": "DEN",
+                "current_wins": 1,
+                "current_ties": 0,
+                "scored_games": 2,
+            }
+        ]
+    )
+
+    result = current_projected_finish_table(preseason, records, 2026).iloc[0]
+
+    assert result["preseason_projected_wins"] == 9.846
+    assert round(result["projected_wins"], 1) == 9.7
+
+
+def test_current_projected_finish_table_keeps_preseason_value_before_games():
+    preseason = pd.DataFrame(
+        [
+            {"team": "LAR", "projected_wins": 8.4},
+            {"team": "SEA", "projected_wins": 10.2},
+        ]
+    )
+
+    result = current_projected_finish_table(preseason, pd.DataFrame(), 2026)
+
+    assert result.set_index("team")["projected_wins"].to_dict() == {
+        "LA": 8.4,
+        "SEA": 10.2,
+    }
 
 
 def test_super_square_completion_gate_uses_results_not_calendar():
