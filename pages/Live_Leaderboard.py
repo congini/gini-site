@@ -3082,7 +3082,14 @@ def roster_strengths(row):
 
 def render_team_detail(leaderboard, production_found):
     labels = [f"#{int(row.live_rank)} {row.team_name} ({row.team})" for row in leaderboard.itertuples()]
-    selected_label = st.selectbox("Team Detail", labels, index=0, key="live_leaderboard_team_detail", width="stretch")
+    selected_label = st.selectbox(
+        "Team Detail",
+        labels,
+        index=0,
+        key="live_leaderboard_team_detail",
+        width="stretch",
+        label_visibility="collapsed",
+    )
     selected_team = selected_label.split("(")[-1].replace(")", "").strip()
     row = leaderboard[leaderboard["team"] == selected_team].iloc[0]
     strength, concern = roster_strengths(row)
@@ -3809,7 +3816,10 @@ def render_css():
     font-weight:800;
 }}
 
-div[data-testid="stSelectbox"] label p{{color:{TEXT}!important;font-size:.94rem!important;font-weight:900!important;}}div[data-testid="stSelectbox"] [data-baseweb="select"]>div{{background-color:white!important;border:1px solid #D1D5DB!important;border-radius:10px!important;box-shadow:0 6px 16px rgba(15,23,42,.045)!important;}}
+div[data-testid="stSelectbox"] label p{{color:{TEXT}!important;font-size:.94rem!important;font-weight:900!important;}}
+div[data-testid="stSelectbox"] [data-baseweb="select"]>div{{background-color:white!important;border:1px solid #D1D5DB!important;border-radius:10px!important;box-shadow:0 6px 16px rgba(15,23,42,.045)!important;color:{TEXT}!important;}}
+div[data-testid="stSelectbox"] [data-baseweb="select"] *{{color:{TEXT}!important;}}
+div[data-testid="stSelectbox"] [data-baseweb="select"] input{{color:{TEXT}!important;-webkit-text-fill-color:{TEXT}!important;}}
 @media(max-width:1100px){{.leader-row{{grid-template-columns:44px minmax(190px,1fr) 92px 74px 74px 74px;}}.quad-cell,.move-cell,.status-pill{{grid-column:span 2;}}.detail-grid{{grid-template-columns:repeat(2,minmax(0,1fr));}}}}
 @media(max-width:780px){{
     .live-page{{margin:-1.05rem auto 0;padding:0 .25rem 2rem;}}
