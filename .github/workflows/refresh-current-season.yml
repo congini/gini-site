@@ -2,9 +2,9 @@ name: Refresh current NFL season
 
 on:
   schedule:
+    # Every Tuesday at 6:00 AM Eastern time (EST/EDT).
     - cron: "0 6 * * 2"
       timezone: "America/New_York"
-  workflow_dispatch:
 
 permissions:
   contents: write
