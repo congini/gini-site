@@ -2,9 +2,9 @@ name: Keep Streamlit app awake
 
 on:
   schedule:
-    # GitHub cron is based on the clock, so this runs at 00:17, 11:17, and
-    # 22:17 UTC. The longest interval between visits is 11 hours.
-    - cron: "17 0,11,22 * * *"
+    # Twice daily at 00:17 and 12:17 UTC: exactly 12 hours between triggers.
+    # Minute 17 avoids the busiest top-of-hour scheduling window.
+    - cron: "17 0,12 * * *"
   workflow_dispatch:
 
 permissions:
