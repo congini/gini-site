@@ -2,8 +2,9 @@ name: Refresh current NFL season
 
 on:
   schedule:
-    # Every Tuesday at 6:00 AM Eastern time (EST/EDT).
-    - cron: "0 6 * * 2"
+    # Ask for a runner before 6:00 AM and away from GitHub's busy
+    # top-of-hour window. The job waits below before refreshing data.
+    - cron: "47 5 * * 2"
       timezone: "America/New_York"
 
 permissions:
@@ -16,8 +17,21 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
+      - name: Wait until 6:00 AM Eastern
+        shell: bash
+        run: |
+          target_epoch=$(TZ=America/New_York date -d "$(TZ=America/New_York date +%F) 06:00:00" +%s)
+          now_epoch=$(date +%s)
+          wait_seconds=$((target_epoch - now_epoch))
+          if (( wait_seconds > 0 )); then
+            echo "Runner is ready early; waiting ${wait_seconds} seconds for 6:00 AM Eastern."
+            sleep "$wait_seconds"
+          else
+            echo "Runner started at or after 6:00 AM Eastern; continuing immediately."
+          fi
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
