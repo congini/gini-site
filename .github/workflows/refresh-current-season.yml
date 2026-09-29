@@ -1,6 +1,7 @@
 name: Refresh current NFL season
 
 on:
+  workflow_dispatch:
   schedule:
     # Ask for a runner before 6:00 AM and away from GitHub's busy
     # top-of-hour window. The job waits below before refreshing data.
@@ -20,6 +21,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Wait until 6:00 AM Eastern
+        if: github.event_name == 'schedule'
         shell: bash
         run: |
           target_epoch=$(TZ=America/New_York date -d "$(TZ=America/New_York date +%F) 06:00:00" +%s)
