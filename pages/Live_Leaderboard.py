@@ -58,6 +58,7 @@ from live_source_refresh import (
     record_model_recalculation,
     refresh_live_sources_if_needed as run_live_source_refresh_if_needed,
 )
+from live_leaderboard_stabilization import stabilize_live_performance
 from season_utils import (
     comparable_ranked_populations,
     current_projected_finish_table,
@@ -167,6 +168,10 @@ SNAPSHOT_COLUMNS = [
     "live_rank",
     "current_gini_score",
     "performance_score",
+    "raw_performance_score",
+    "performance_baseline_score",
+    "performance_reliability",
+    "stabilized_performance_score",
     "roster_score",
     "projected_wins",
     "projected_wins_low",
@@ -1118,6 +1123,7 @@ def build_blended_current_performance(team_season, selected_season, team_univers
     """Use one comparable performance season for the live ranking population."""
     performance_all, source = build_performance_scores(team_season)
     current = select_live_performance_population(performance_all, selected_season, team_universe)
+    current = stabilize_live_performance(current, performance_all)
     return current, performance_all, source
 
 
@@ -1614,6 +1620,11 @@ def align_projected_wins_to_predictive_model(projected_wins, records, selected_s
     if not synced.any():
         return projected_wins, 0
 
+    # Predictive finishes are fractional.  Coerce these columns before the
+    # masked assignment so Pandas 3 does not reject decimals in an int64 block.
+    for column in ("projected_wins", "projected_wins_low", "projected_wins_high"):
+        output[column] = pd.to_numeric(output.get(column), errors="coerce").astype(float)
+
     original = pd.to_numeric(output["projected_wins"], errors="coerce")
     lower = pd.to_numeric(output.get("projected_wins_low"), errors="coerce")
     upper = pd.to_numeric(output.get("projected_wins_high"), errors="coerce")
@@ -1925,9 +1936,10 @@ def calculate_quadrant_probabilities(team_game, performance_season, team_univers
 
 
 def calculate_live_market_score(row):
+    live_performance = row.get("stabilized_performance_score", row.get("performance_score", 85))
     return float(
         np.clip(
-            0.65 * row["performance_score"]
+            0.65 * live_performance
             + 0.10 * row["roster_score"]
             + 0.15 * row["projected_wins_score"]
             + 0.10 * row["quadrant_probability_score"],
@@ -1947,6 +1959,12 @@ def merge_leaderboard_scores(performance_df, roster_scores, projected_wins, quad
     output["team_primary_color"] = output["team"].map(lambda team: colors.get(team, {}).get("primary", PRIMARY))
     output["team_secondary_color"] = output["team"].map(lambda team: colors.get(team, {}).get("secondary", SECONDARY))
     output["season"] = selected_season
+    output["raw_performance_score"] = pd.to_numeric(
+        output.get("raw_performance_score", output.get("performance_score")), errors="coerce"
+    )
+    output["stabilized_performance_score"] = pd.to_numeric(
+        output.get("stabilized_performance_score", output.get("performance_score")), errors="coerce"
+    ).fillna(output["raw_performance_score"])
     for column, fallback in [
         ("roster_score", 75),
         ("projected_wins", 8.5),
@@ -2571,14 +2589,12 @@ def render_live_status_strip(selected_season, weekly_snapshot_period, leaderboar
     best_record = record_text(best)
     worst_record = record_text(worst)
 
-    components.html(
-        f"""
+    st.markdown(
+        "\n".join(line for line in f"""
 <style>
-html, body {{
-    margin:0;
-    padding:0;
-    background:transparent;
-    overflow:hidden;
+.header-box,
+.header-box * {{
+    box-sizing:border-box;
     font-family:"Inter", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, Arial, sans-serif;
 }}
 
@@ -2911,6 +2927,12 @@ html, body {{
     }}
 }}
 
+@media(max-width:1420px) and (min-width:1181px) {{
+    .status-strip {{
+        grid-template-columns:1fr;
+    }}
+}}
+
 @media(max-width:760px) {{
     .hero-section {{
         padding:1.1rem 1.15rem .95rem;
@@ -2934,6 +2956,42 @@ html, body {{
         grid-template-columns:1fr 1fr;
     }}
 
+}}
+
+@media(max-width:520px) {{
+    .hero-title {{
+        font-size:1.95rem;
+    }}
+
+    .hero-copy {{
+        font-size:.88rem;
+    }}
+
+    .status-strip {{
+        padding:.75rem .85rem .9rem;
+    }}
+
+    .section-divider {{
+        margin:0 .85rem;
+    }}
+
+    .status-left {{
+        grid-template-columns:1fr 1fr;
+    }}
+
+    .status-right {{
+        grid-template-columns:1fr 1fr;
+    }}
+
+    .status-card {{
+        min-height:82px;
+        padding:.66rem .72rem;
+    }}
+
+    .headline-card {{
+        min-height:140px;
+        padding:.7rem .48rem .78rem;
+    }}
 }}
 </style>
 
@@ -2999,9 +3057,8 @@ html, body {{
         </div>
     </div>
 </div>
-""",
-        height=375,
-        scrolling=False,
+""".splitlines() if line.strip()),
+        unsafe_allow_html=True,
     )
 
 
@@ -3021,9 +3078,9 @@ def render_leaderboard(leaderboard):
   <div class="rank-cell">{int(row["live_rank"])}</div>
   <div class="team-cell"><div class="row-logo-wrap">{logo_html(team, row.get("team_logo", ""), "row-logo")}</div><div><div class="team-name">{escape(row["team_name"])}</div><div class="team-abbr">{escape(team)}</div></div></div>
   <div class="score-cell"><div class="score-value">{number(row["live_market_score"])}</div><div class="score-label">Live Score</div></div>
-  <div class="mini-cell"><b>{number(row["current_gini_score"])}</b><span>Gini</span></div>
-  <div class="mini-cell"><b>{number(row["roster_score"])}</b><span>Roster</span></div>
-  <div class="mini-cell"><b>{number(row["projected_wins"])}</b><span>Wins</span></div>
+  <div class="mini-cell gini-cell"><b>{number(row["current_gini_score"])}</b><span>Gini</span></div>
+  <div class="mini-cell roster-cell"><b>{number(row["roster_score"])}</b><span>Roster</span></div>
+  <div class="mini-cell wins-cell"><b>{number(row["projected_wins"])}</b><span>Wins</span></div>
   <div class="quad-cell"><b>{escape(str(row["most_likely_quadrant"]).replace(" - ", " "))}</b><span>{pct(row["highest_quadrant_probability"])} current profile probability</span></div>
   <div class="move-cell {move_class}"><b>{movement_html}</b><span>{escape(score_text)}</span></div>
   <div class="status-pill">{escape(row["status_label"])}</div>
@@ -3094,13 +3151,15 @@ def render_team_detail(leaderboard, production_found):
     row = leaderboard[leaderboard["team"] == selected_team].iloc[0]
     strength, concern = roster_strengths(row)
     production_note = "Established players are anchored by prior-season NFL production, with current-season production phased in as games accumulate. Draft capital is only a fallback when NFL production is unavailable." if production_found else "Player production stats were not found, so the roster score is currently using draft capital, experience, availability, continuity, and position-depth proxies. Once player stat files are added, the model will shift toward actual player production."
-    explanation = f"The {row['team_name']} rank {ordinal(row['live_rank'])} because their Gini profile and roster context combine into a {row['live_market_score']:.1f} Live Market Score. Their projected win range is {int(row['projected_wins_low'])} to {int(row['projected_wins_high'])} wins, and their current profile points most strongly toward {row['most_likely_quadrant']} with a {row['highest_quadrant_probability'] * 100:.0f}% probability. Their roster score is strongest in {strength} and most limited by {concern}. This is a current team-market rating, not a guarantee."
+    explanation = f"The {row['team_name']} rank {ordinal(row['live_rank'])} because their sample-size-adjusted Live Performance and roster context combine into a {row['live_market_score']:.1f} Live Market Score. The raw season-to-date Gini remains unchanged; only its Live Leaderboard interpretation is steadied while the sample is small. Their projected win range is {int(row['projected_wins_low'])} to {int(row['projected_wins_high'])} wins, and their current profile points most strongly toward {row['most_likely_quadrant']} with a {row['highest_quadrant_probability'] * 100:.0f}% probability. Their roster score is strongest in {strength} and most limited by {concern}. This is a current team-market rating, not a guarantee."
     metric_items = [
         ("Live Market Score", row.get("live_market_score")),
         ("Current Gini Score", row.get("current_gini_score")),
         ("Roster Score", row.get("roster_score")),
         ("Projected Wins", row.get("projected_wins")),
-        ("Performance Score", row.get("performance_score")),
+        ("Raw Performance Score", row.get("raw_performance_score", row.get("performance_score"))),
+        ("Live Performance Score", row.get("stabilized_performance_score", row.get("performance_score"))),
+        ("Current Evidence Weight", 100 * row.get("performance_reliability", 1)),
         ("QB Score", row.get("qb_score")),
         ("Offensive Line", row.get("offensive_line_score")),
         ("Skill Positions", row.get("offense_skill_score")),
@@ -3457,7 +3516,7 @@ def render_css():
     padding-top:0!important;
     padding-bottom:2.5rem!important;
 }}
-.live-page{{max-width:1520px;margin:0 auto;padding:.35rem 1rem 2.5rem;}}
+.live-page{{box-sizing:border-box;width:100%;max-width:1520px;margin:0 auto;padding:.35rem 1rem 2.5rem;}}
 .leader-hero{{position:relative;overflow:hidden;margin:.9rem 0 1rem;padding:2rem;border-radius:20px;border:1px solid rgba(255,255,255,.16);background:radial-gradient(circle at 88% 12%,rgba(241,90,36,.34),transparent 30%),radial-gradient(circle at 78% 88%,rgba(0,115,183,.30),transparent 32%),linear-gradient(135deg,#07111f,#172033 58%,#263447);box-shadow:0 24px 52px rgba(15,23,42,.20);}}
 .leader-hero:before{{content:"";position:absolute;top:0;left:0;right:0;height:5px;background:linear-gradient(90deg,{PRIMARY},{SECONDARY});}}
 .hero-kicker{{color:rgba(255,255,255,.70);font-size:.78rem;font-weight:950;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.55rem;}}
@@ -3496,7 +3555,7 @@ def render_css():
 .section-heading{{color:{TEXT};font-size:1.32rem;font-weight:950;margin:1.1rem 0 .7rem;}}
 .section-heading:after{{content:"";display:block;width:58px;height:4px;border-radius:999px;margin-top:.45rem;background:linear-gradient(90deg,{PRIMARY},{SECONDARY});}}
 .leaderboard-wrap{{display:grid;gap:.55rem;}}
-.leader-row{{display:grid;grid-template-columns:48px minmax(220px,1.6fr) 112px 88px 88px 88px minmax(220px,1.25fr) 82px 126px;gap:.7rem;align-items:center;min-height:76px;padding:.7rem .78rem;border-radius:16px;background:rgba(255,255,255,.92);border:1px solid rgba(15,23,42,.10);border-left:5px solid var(--team-primary);box-shadow:0 10px 24px rgba(15,23,42,.055);}}
+.leader-row{{box-sizing:border-box;width:100%;min-width:0;display:grid;grid-template-columns:48px minmax(220px,1.6fr) 112px 88px 88px 88px minmax(220px,1.25fr) 82px 126px;gap:.7rem;align-items:center;min-height:76px;padding:.7rem .78rem;border-radius:16px;background:rgba(255,255,255,.92);border:1px solid rgba(15,23,42,.10);border-left:5px solid var(--team-primary);box-shadow:0 10px 24px rgba(15,23,42,.055);}}
 .rank-cell{{display:flex;align-items:center;justify-content:center;width:42px;height:42px;border-radius:12px;color:white;background:linear-gradient(135deg,var(--team-primary),var(--team-secondary));font-size:1.05rem;font-weight:950;}}
 .team-cell,.detail-header,.mover-item{{display:flex;align-items:center;gap:.72rem;min-width:0;}}
 .row-logo-wrap{{width:48px;height:48px;flex:0 0 48px;display:flex;align-items:center;justify-content:center;}}
@@ -3694,6 +3753,8 @@ def render_css():
     margin-top:.05rem;
 }}
 .live-page{{
+    box-sizing:border-box;
+    width:100%;
     max-width:1520px;
     margin:-3.35rem auto 0;
     padding:0 1rem 2.5rem;
@@ -3820,19 +3881,98 @@ div[data-testid="stSelectbox"] label p{{color:{TEXT}!important;font-size:.94rem!
 div[data-testid="stSelectbox"] [data-baseweb="select"]>div{{background-color:white!important;border:1px solid #D1D5DB!important;border-radius:10px!important;box-shadow:0 6px 16px rgba(15,23,42,.045)!important;color:{TEXT}!important;}}
 div[data-testid="stSelectbox"] [data-baseweb="select"] *{{color:{TEXT}!important;}}
 div[data-testid="stSelectbox"] [data-baseweb="select"] input{{color:{TEXT}!important;-webkit-text-fill-color:{TEXT}!important;}}
-@media(max-width:1100px){{.leader-row{{grid-template-columns:44px minmax(190px,1fr) 92px 74px 74px 74px;}}.quad-cell,.move-cell,.status-pill{{grid-column:span 2;}}.detail-grid{{grid-template-columns:repeat(2,minmax(0,1fr));}}}}
+@media(max-width:1100px){{
+    .leader-row{{
+        grid-template-columns:44px minmax(180px,1.45fr) 92px repeat(3,minmax(64px,.62fr));
+        grid-template-areas:
+            "rank team score gini roster wins"
+            ". quad quad move status status";
+        row-gap:.72rem;
+    }}
+    .rank-cell{{grid-area:rank;}}
+    .team-cell{{grid-area:team;}}
+    .score-cell{{grid-area:score;}}
+    .gini-cell{{grid-area:gini;}}
+    .roster-cell{{grid-area:roster;}}
+    .wins-cell{{grid-area:wins;}}
+    .quad-cell{{grid-area:quad;}}
+    .move-cell{{grid-area:move;}}
+    .status-pill{{grid-area:status;}}
+    .detail-grid{{grid-template-columns:repeat(3,minmax(0,1fr));}}
+}}
 @media(max-width:780px){{
-    .live-page{{margin:-1.05rem auto 0;padding:0 .25rem 2rem;}}
+    .live-page{{margin:-1.05rem auto 0;padding:0 .45rem 2rem;}}
     .leader-hero{{padding:1.25rem 1rem;border-radius:16px 16px 0 0;}}
     .hero-title{{font-size:clamp(1.85rem,10vw,2.45rem);}}
     .hero-copy{{font-size:.9rem;}}
     .market-pills .live-time-pill{{width:100%;white-space:normal;text-align:center;line-height:1.25;padding:.65rem .85rem;}}
     .current-season-left{{gap:1rem;flex-wrap:wrap;}}
-    .leader-row{{grid-template-columns:42px minmax(0,1fr);gap:.55rem;border-radius:14px;}}
+    .leader-row{{
+        grid-template-columns:44px minmax(170px,1.4fr) repeat(2,minmax(78px,.72fr));
+        grid-template-areas:
+            "rank team score move"
+            ". quad gini roster"
+            ". quad wins status";
+        gap:.62rem .72rem;
+        min-height:0;
+        padding:.78rem;
+        border-radius:14px;
+    }}
     .team-name{{white-space:normal;}}
-    .score-cell,.mini-cell,.quad-cell,.move-cell,.status-pill{{grid-column:2;}}
-    .movers-grid,.detail-grid,.prob-row,.source-status-card,.source-files-card,.refresh-detail-grid,.source-found-grid{{grid-template-columns:1fr;}}
+    .score-cell,.mini-cell,.quad-cell,.move-cell,.status-pill{{min-width:0;}}
+    .movers-grid,.source-status-card,.source-files-card,.refresh-detail-grid,.source-found-grid{{grid-template-columns:1fr;}}
+    .detail-grid{{grid-template-columns:repeat(2,minmax(0,1fr));}}
+    .prob-row{{grid-template-columns:repeat(2,minmax(0,1fr));}}
     .source-file-list{{justify-content:flex-start;}}
+    [data-testid="stPlotlyChart"],[data-testid="stDataFrame"]{{max-width:100%;overflow-x:auto;}}
+}}
+@media(max-width:540px){{
+    .live-page{{padding:0 .25rem 1.6rem;}}
+    .section-heading{{font-size:1.12rem;}}
+    .leader-row{{
+        position:relative;
+        grid-template-columns:repeat(2,minmax(0,1fr));
+        grid-template-areas:
+            "team team"
+            "score move"
+            "gini roster"
+            "wins status"
+            "quad quad";
+        gap:.58rem;
+        padding:.78rem;
+    }}
+    .rank-cell{{position:absolute;top:.78rem;left:.78rem;width:42px;height:42px;z-index:1;}}
+    .team-cell{{padding-left:52px;min-height:44px;}}
+    .row-logo-wrap{{width:42px;height:42px;flex-basis:42px;}}
+    .row-logo,.team-logo{{max-width:41px;max-height:41px;}}
+    .score-cell,.mini-cell,.move-cell,.status-pill,.quad-cell{{
+        box-sizing:border-box;
+        width:100%;
+        min-height:54px;
+        padding:.55rem .62rem;
+        border-radius:10px;
+        background:rgba(248,250,252,.92);
+        border:1px solid rgba(15,23,42,.07);
+    }}
+    .score-cell,.mini-cell,.move-cell{{display:flex;flex-direction:column;justify-content:center;}}
+    .status-pill{{justify-self:stretch;white-space:normal;text-align:center;}}
+    .quad-cell{{min-height:58px;}}
+    .quad-cell b{{white-space:normal;}}
+    .detail-header{{align-items:flex-start;}}
+    .detail-logo-wrap{{width:58px;height:58px;flex-basis:58px;}}
+    .detail-logo{{max-width:56px;max-height:56px;}}
+    .detail-title{{font-size:1.18rem;}}
+    .detail-grid{{grid-template-columns:repeat(2,minmax(0,1fr));gap:.46rem;}}
+    .detail-metric{{min-height:60px;padding:.58rem;}}
+    .detail-metric b{{font-size:1rem;word-break:break-word;}}
+    .mover-item{{align-items:flex-start;}}
+}}
+@media(max-width:390px){{
+    .leader-row{{padding:.68rem;}}
+    .rank-cell{{top:.68rem;left:.68rem;}}
+    .team-cell{{padding-left:50px;}}
+    .team-name{{font-size:.91rem;}}
+    .score-value{{font-size:1.22rem;}}
 }}
 </style>
 """,
