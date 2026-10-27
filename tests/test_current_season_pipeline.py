@@ -426,4 +426,4 @@ def test_deployed_tab_styling_is_version_tolerant_and_runtime_is_pinned():
     assert '.stTabs [role="tablist"]' in nav_source
     assert '.stTabs [role="tab"]' in nav_source
     assert 'div[data-testid="stTabs"] [role="tab"]' in nav_source
-    assert "streamlit==1.58.0" in requirements
+    assert "streamlit==1.66.1" in requirements

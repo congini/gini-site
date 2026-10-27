@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
-from live_leaderboard_history import (
+from live_leaderboard_weekly import (
     finalizable_week_key,
     finalized_week_snapshot,
     freeze_weekly_snapshot,

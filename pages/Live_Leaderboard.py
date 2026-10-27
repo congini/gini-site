@@ -62,13 +62,12 @@ from live_leaderboard_stabilization import stabilize_live_performance
 from live_leaderboard_history import (
     available_snapshot_keys,
     build_team_history,
-    calculate_weekly_rank_movement,
     combine_recorded_and_reconstructed,
     parse_week_key,
-    previous_finalized_week_snapshot,
     snapshot_leaderboard,
     week_label,
 )
+from live_leaderboard_weekly import calculate_weekly_rank_movement, previous_finalized_week_snapshot
 from live_leaderboard_replay import prepare_replay_inputs
 from season_utils import (
     comparable_ranked_populations,

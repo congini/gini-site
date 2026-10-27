@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 import snapshot_live_leaderboard as snapshot_pipeline
 
-from live_leaderboard_history import (
+from live_leaderboard_weekly import (
     NFL_TEAMS, calculate_weekly_rank_movement, finalizable_week_key,
     finalized_week_snapshot, freeze_weekly_snapshot,
     previous_finalized_week_snapshot, write_weekly_history,

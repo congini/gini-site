@@ -1,6 +1,8 @@
 """Smoke-test production UI calls with the installed Streamlit runtime."""
 
 import ast
+import sys
+from types import ModuleType
 from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
@@ -66,9 +68,29 @@ def test_header_and_team_picker_render_and_navigate_without_runtime_errors():
 
     app.button(key="leaderboard-week-back").click().run()
     assert not app.exception
-    assert app.query_params["leaderboard_week"] == ["2026-Week-06"]
+    assert app.query_params["leaderboard_week"] in ("2026-Week-06", ["2026-Week-06"])
     assert app.button(key="leaderboard-week-back").disabled
 
     app.button(key="leaderboard-week-forward").click().run()
     assert not app.exception
-    assert app.query_params["leaderboard_week"] == ["2026-Week-07"]
+    assert app.query_params["leaderboard_week"] in ("2026-Week-07", ["2026-Week-07"])
+
+
+def test_page_imports_work_with_the_predeployment_history_module_cached(monkeypatch):
+    import live_leaderboard_history as history
+
+    # Streamlit can retain this older module during a live Git update.
+    cached_history = ModuleType("live_leaderboard_history")
+    for name in ("available_snapshot_keys", "build_team_history",
+                 "combine_recorded_and_reconstructed", "parse_week_key",
+                 "snapshot_leaderboard", "week_label"):
+        setattr(cached_history, name, getattr(history, name))
+    monkeypatch.setitem(sys.modules, "live_leaderboard_history", cached_history)
+    monkeypatch.delitem(sys.modules, "live_leaderboard_weekly", raising=False)
+    imports = [node for node in ast.parse(PAGE.read_text(encoding="utf-8")).body
+               if isinstance(node, ast.ImportFrom)
+               and node.module in {"live_leaderboard_history", "live_leaderboard_weekly"}]
+    namespace = {}
+    exec(compile(ast.Module(body=imports, type_ignores=[]), str(PAGE), "exec"), namespace)
+    assert callable(namespace["calculate_weekly_rank_movement"])
+    assert callable(namespace["previous_finalized_week_snapshot"])
