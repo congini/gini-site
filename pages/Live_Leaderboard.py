@@ -62,8 +62,10 @@ from live_leaderboard_stabilization import stabilize_live_performance
 from live_leaderboard_history import (
     available_snapshot_keys,
     build_team_history,
+    calculate_weekly_rank_movement,
     combine_recorded_and_reconstructed,
     parse_week_key,
+    previous_finalized_week_snapshot,
     snapshot_leaderboard,
     week_label,
 )
@@ -2041,62 +2043,16 @@ def load_refresh_baseline():
     return baseline, not baseline.empty
 
 
-def _set_neutral_weekly_movement(output):
-    output["previous_week_rank"] = output.get("live_rank", 0)
-    output["previous_week_score"] = output.get("live_market_score", 0.0)
-    output["weekly_rank_change"] = 0
-    output["weekly_score_change"] = 0.0
-    output["weekly_movement_arrow"] = "\u2192"
+def calculate_weekly_movement(leaderboard, weekly_history, current_week=None, schedule=None, *, historical=False):
+    """Compare only the exact preceding NFL week, never a daily refresh baseline."""
+    output = calculate_weekly_rank_movement(leaderboard, weekly_history, current_week, schedule, historical=historical)
     output["previous_rank"] = output["previous_week_rank"]
-    output["previous_score"] = output["previous_week_score"]
     output["rank_change"] = output["weekly_rank_change"]
-    output["score_change"] = output["weekly_score_change"]
-    output["movement_arrow"] = output["weekly_movement_arrow"]
     return output
 
 
-def calculate_weekly_movement(leaderboard, weekly_snapshot):
-    output = leaderboard.copy()
-    required = {"season", "team", "live_rank", "live_market_score"}
-    if output.empty or weekly_snapshot.empty or not required.issubset(weekly_snapshot.columns):
-        return _set_neutral_weekly_movement(output)
-
-    previous = weekly_snapshot[weekly_snapshot["season"] == output["season"].iloc[0]].copy()
-    if previous.empty or not comparable_ranked_populations(output, previous):
-        return _set_neutral_weekly_movement(output)
-
-    previous = previous[["team", "live_rank", "live_market_score"]].rename(
-        columns={
-            "live_rank": "previous_week_rank",
-            "live_market_score": "previous_week_score",
-        }
-    )
-    output = output.merge(previous, on="team", how="left")
-    output["previous_week_rank"] = pd.to_numeric(output["previous_week_rank"], errors="coerce").fillna(output["live_rank"])
-    output["previous_week_score"] = pd.to_numeric(output["previous_week_score"], errors="coerce").fillna(output["live_market_score"])
-    output["weekly_rank_change"] = weekly_rank_change(
-        output["previous_week_rank"],
-        output["live_rank"],
-    )
-    output["weekly_score_change"] = pd.to_numeric(output["live_market_score"], errors="coerce") - pd.to_numeric(output["previous_week_score"], errors="coerce")
-    output["weekly_movement_arrow"] = np.select(
-        [
-            output["weekly_rank_change"] > 0,
-            output["weekly_rank_change"] < 0,
-        ],
-        ["\u2191", "\u2193"],
-        default="\u2192",
-    )
-    output["previous_rank"] = output["previous_week_rank"]
-    output["previous_score"] = output["previous_week_score"]
-    output["rank_change"] = output["weekly_rank_change"]
-    output["score_change"] = output["weekly_score_change"]
-    output["movement_arrow"] = output["weekly_movement_arrow"]
-    return output
-
-
-def calculate_rank_movement(leaderboard, previous_snapshot):
-    return calculate_weekly_movement(leaderboard, previous_snapshot)
+def calculate_rank_movement(leaderboard, weekly_history, current_week=None, schedule=None):
+    return calculate_weekly_movement(leaderboard, weekly_history, current_week, schedule)
 
 
 def should_save_daily_snapshot():
@@ -2420,43 +2376,10 @@ def load_weekly_history():
 
 
 def get_latest_weekly_movement_snapshot(current_week):
-    refresh_baseline, has_refresh_baseline = load_refresh_baseline()
-    if has_refresh_baseline:
-        return refresh_baseline, True
-
-    history, has_history = load_weekly_history()
-
-    if not has_history or "snapshot_week" not in history.columns:
-        return pd.DataFrame(), False
-
-    current_sort_key = snapshot_period_sort_key(current_week)
-    if current_sort_key is None:
-        return pd.DataFrame(), False
-
-    history = history.copy()
-    history["_snapshot_sort_key"] = history["snapshot_week"].apply(snapshot_period_sort_key)
-    history = history[history["_snapshot_sort_key"].notna()].copy()
-    candidates = history[
-        history["_snapshot_sort_key"].apply(
-            lambda sort_key: is_prior_snapshot_period(sort_key, current_sort_key)
-        )
-    ].copy()
-
-    if candidates.empty:
-        return pd.DataFrame(), False
-
-    latest_sort_key = max(candidates["_snapshot_sort_key"])
-    latest_snapshot = candidates[candidates["_snapshot_sort_key"].apply(lambda sort_key: sort_key == latest_sort_key)].copy()
-
-    if "snapshot_timestamp" in latest_snapshot.columns:
-        timestamps = pd.to_datetime(latest_snapshot["snapshot_timestamp"], errors="coerce", utc=True)
-        if timestamps.notna().any():
-            latest_timestamp = timestamps.max()
-            latest_snapshot = latest_snapshot[timestamps.eq(latest_timestamp)].copy()
-
-    latest_snapshot = latest_snapshot.drop(columns=["_snapshot_sort_key"], errors="ignore")
-
-    return latest_snapshot, not latest_snapshot.empty
+    history, _ = load_weekly_history()
+    schedule, _ = safe_read_csv(DATA_DIR / "games_2005_onward.csv")
+    snapshot = previous_finalized_week_snapshot(history, current_week, schedule)
+    return snapshot, not snapshot.empty
 
 
 def get_latest_prior_week_snapshot(current_week):
@@ -2464,57 +2387,13 @@ def get_latest_prior_week_snapshot(current_week):
 
 
 def should_save_weekly_snapshot(week_key):
-    if not week_key:
-        return False
-    if snapshot_period_sort_key(week_key) is None:
-        return False
-
-    current_time = now_et()
-    save_cutoff = WEEKLY_SNAPSHOT_CUTOFFS.get(str(week_key), current_calendar_week_cutoff(current_time))
-
-    if current_time < save_cutoff:
-        return False
-
-    history, has_history = load_weekly_history()
-
-    if has_history and weekly_snapshot_already_saved(history, week_key, save_cutoff):
-        return False
-
-    return True
+    # Browser sessions are read-only consumers of the authoritative archive.
+    # snapshot_live_leaderboard.py owns finalization after data validation.
+    return False
 
 
 def save_weekly_snapshot_if_needed(leaderboard, week_key):
-    if not should_save_weekly_snapshot(week_key):
-        return False, week_key
-
-    history, has_history = load_weekly_history()
-    save_cutoff = WEEKLY_SNAPSHOT_CUTOFFS.get(str(week_key), current_calendar_week_cutoff(now_et()))
-
-    if has_history and weekly_snapshot_already_saved(history, week_key, save_cutoff):
-        return False, week_key
-
-    snapshot = leaderboard.copy()
-    snapshot["snapshot_timestamp"] = now_et().isoformat()
-    snapshot["snapshot_window"] = weekly_snapshot_window_key(save_cutoff)
-    snapshot["snapshot_week"] = week_key
-
-    weekly_columns = ["snapshot_window", "snapshot_week"] + SNAPSHOT_COLUMNS
-
-    for column in weekly_columns:
-        if column not in snapshot.columns:
-            snapshot[column] = pd.NA
-
-    new_rows = snapshot[weekly_columns].copy()
-
-    if has_history and not history.empty:
-        history = pd.concat([history, new_rows], ignore_index=True)
-    else:
-        history = new_rows
-
-    WEEKLY_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    history.to_csv(WEEKLY_HISTORY_PATH, index=False)
-
-    return True, week_key
+    return False, week_key
 
 
 def generate_status_label(row):
@@ -3064,6 +2943,20 @@ def team_history_html(team, team_history, logo_lookup):
     )
 
 
+def weekly_movement_html(row):
+    """Keep unavailable comparisons distinct from a verified unchanged rank."""
+    change = pd.to_numeric(row.get("weekly_rank_change"), errors="coerce")
+    available = pd.notna(change) and bool(row.get("weekly_movement_available", False))
+    if not available:
+        return '<div class="status-pill weekly-movement weekly-unavailable" title="Previous finalized NFL week unavailable" aria-label="Weekly rank movement unavailable"><span aria-hidden="true">—</span></div>'
+    direction = "up" if change > 0 else "down" if change < 0 else "flat"
+    previous = week_label(row.get("weekly_comparison_key", ""))
+    unit = "place" if abs(change) == 1 else "places"
+    label = f"Moved {direction} {abs(int(change))} {unit} from finalized {previous}" if change else f"Unchanged from finalized {previous}"
+    content = f'{movement_arrow_svg(direction, "weekly-movement-icon")}<span>{abs(int(change))}</span>' if change else "<span>—</span>"
+    return f'<div class="status-pill weekly-movement weekly-{direction}" title="{escape(label)}" aria-label="{escape(label)}">{content}</div>'
+
+
 def render_leaderboard(
     leaderboard,
     team_history,
@@ -3128,7 +3021,7 @@ def render_leaderboard(
   <div class="mini-cell roster-cell"><b>{number(row["roster_score"])}</b><span>Roster</span></div>
   <div class="mini-cell wins-cell"><b>{number(row["projected_wins"])}</b><span>Projected Wins</span></div>
   <div class="record-cell"><b>{escape(current_record)}</b><span>Current Record</span></div>
-  <div class="status-pill">{escape(row.get("status_label", "Snapshot"))}</div>
+  {weekly_movement_html(row)}
   <div class="history-chevron" aria-hidden="true"></div>
  </summary>
  {history_html}
@@ -3653,7 +3546,7 @@ def render_css():
 [role="listbox"][aria-label="Team Detail"] [role="option"]:hover{{background:#EFF6FB!important;}}
 [role="listbox"][aria-label="Team Detail"] [role="option"][aria-selected="true"]{{background:#EAF4FB!important;color:{SECONDARY}!important;}}
 .leader-row{{box-sizing:border-box;width:100%;min-width:0;border-radius:16px;background:rgba(255,255,255,.92);border:1px solid rgba(15,23,42,.10);border-left:5px solid var(--team-primary);box-shadow:0 10px 24px rgba(15,23,42,.055);overflow:hidden;}}
-.leader-summary{{position:relative;box-sizing:border-box;width:100%;min-width:0;display:grid;grid-template-columns:48px minmax(220px,1.6fr) 112px 88px 88px 104px minmax(150px,.9fr) 126px 24px;gap:.7rem;align-items:center;min-height:76px;padding:.7rem .78rem;cursor:pointer;list-style:none;}}
+.leader-summary{{position:relative;box-sizing:border-box;width:100%;min-width:0;display:grid;grid-template-columns:48px minmax(220px,1.8fr) repeat(6,minmax(0,1fr)) 24px;gap:.7rem;align-items:center;min-height:76px;padding:.7rem .78rem;cursor:pointer;list-style:none;}}
 .leader-summary::-webkit-details-marker{{display:none;}}
 .leader-summary::marker{{display:none;content:"";}}
 .leader-summary:hover{{background:rgba(248,250,252,.72);}}
@@ -3683,6 +3576,11 @@ def render_css():
 .movement-flat-mark{{display:block;min-width:15px;text-align:center;color:#64748B;font-size:1rem;line-height:1;font-weight:950;}}
 .move-up b{{color:#15803D;}}.move-down b{{color:#DC2626;}}.move-flat b{{color:#475569;}}
 .status-pill{{justify-self:start;display:inline-flex;align-items:center;justify-content:center;min-height:30px;padding:.35rem .62rem;border-radius:999px;background:rgba(15,23,42,.06);color:{TEXT};font-size:.78rem;font-weight:950;white-space:nowrap;}}
+.weekly-movement{{gap:.3rem;background:transparent;}}
+.weekly-movement-icon{{display:block;width:16px;height:16px;flex:0 0 16px;}}
+.weekly-movement.weekly-up,.weekly-movement.weekly-up span,.weekly-movement.weekly-up svg,.weekly-movement.weekly-up path{{color:#15803D!important;stroke:currentColor;}}
+.weekly-movement.weekly-down,.weekly-movement.weekly-down span,.weekly-movement.weekly-down svg,.weekly-movement.weekly-down path{{color:#DC2626!important;stroke:currentColor;}}
+.weekly-movement.weekly-flat,.weekly-movement.weekly-unavailable,.weekly-movement.weekly-flat span,.weekly-movement.weekly-unavailable span{{color:#64748B!important;}}
 .history-chevron{{width:20px;height:20px;position:relative;justify-self:end;color:#64748B;}}
 .history-chevron::before,.history-chevron::after{{content:"";position:absolute;left:4px;right:4px;top:9px;height:2px;border-radius:2px;background:currentColor;transition:transform .18s ease;}}
 .history-chevron::after{{transform:rotate(90deg);}}
@@ -4005,6 +3903,12 @@ div[data-testid="stSelectbox"] label p{{color:{TEXT}!important;font-size:.94rem!
 div[data-testid="stSelectbox"] [data-baseweb="select"]>div{{background-color:white!important;border:1px solid #D1D5DB!important;border-radius:10px!important;box-shadow:0 6px 16px rgba(15,23,42,.045)!important;color:{TEXT}!important;}}
 div[data-testid="stSelectbox"] [data-baseweb="select"] *{{color:{TEXT}!important;}}
 div[data-testid="stSelectbox"] [data-baseweb="select"] input{{color:{TEXT}!important;-webkit-text-fill-color:{TEXT}!important;}}
+@media(min-width:1101px){{
+    .leader-summary .score-cell,.leader-summary .mini-cell,.leader-summary .record-cell{{display:grid;grid-template-rows:24px 16px;align-items:center;text-align:center;}}
+    .leader-summary .score-label,.leader-summary .mini-cell > span,.leader-summary .record-cell > span{{display:block;line-height:16px;}}
+    .leader-summary .weekly-movement{{justify-self:center;}}
+    .leader-summary .team-cell > div:last-child{{min-width:0;}}
+}}
 @media(max-width:1100px){{
     .leader-summary{{
         grid-template-columns:44px minmax(180px,1.45fr) 92px repeat(3,minmax(64px,.62fr)) 28px;
@@ -4141,6 +4045,11 @@ if replay_period:
     # any daily/weekly history writes or public rendering can run.
     st.session_state["live_leaderboard_replay_payload"] = payload
     st.stop()
+if os.getenv("LIVE_LEADERBOARD_CAPTURE_ONLY") == "1":
+    # The post-refresh finalizer validates completeness and freezes the payload.
+    # Capturing must never create browser-timed or daily weekly-history writes.
+    st.session_state["live_leaderboard_capture_payload"] = payload
+    st.stop()
 print(f"Live Leaderboard payload timings (cached or rebuilt): {payload.get('build_timings', {})}")
 
 leaderboard = payload["leaderboard"]
@@ -4165,13 +4074,12 @@ if payload.get("team_season_empty") or leaderboard.empty:
     st.error("Live Leaderboard needs team_season_estat.csv to build the Gini foundation.")
     st.stop()
 
-weekly_snapshot_saved, weekly_snapshot_key = save_weekly_snapshot_if_needed(leaderboard, weekly_snapshot_key)
 leaderboard["status_label"] = leaderboard.apply(generate_status_label, axis=1)
 save_live_snapshot(leaderboard, weekly_snapshot_key)
 
-weekly_history, _ = load_weekly_history()
+recorded_weekly_history, _ = load_weekly_history()
 reconstructed_history, _ = safe_read_csv(DATA_DIR / "live_leaderboard_reconstructed_history.csv") if (DATA_DIR / "live_leaderboard_reconstructed_history.csv").exists() else (pd.DataFrame(), "")
-weekly_history = combine_recorded_and_reconstructed(weekly_history, reconstructed_history)
+weekly_history = combine_recorded_and_reconstructed(recorded_weekly_history, reconstructed_history)
 team_game = initial_data.get("team_game", pd.DataFrame())
 team_history = build_team_history(
     weekly_history,
@@ -4204,6 +4112,14 @@ else:
     displayed_leaderboard = leaderboard
     displayed_period = weekly_snapshot_period
     leaderboard_heading = "Current"
+
+# Both live and historical views use their own exact preceding NFL week.
+# Backfilled display estimates and daily snapshots cannot supply a frozen baseline.
+displayed_leaderboard = calculate_weekly_movement(
+    displayed_leaderboard, recorded_weekly_history, selected_period_key,
+    initial_data.get("games", pd.DataFrame()),
+    historical=selected_snapshot_key is not None,
+)
 
 st.markdown('<div class="live-page">', unsafe_allow_html=True)
 

@@ -1,20 +1,23 @@
-"""Persist the leaderboard visible immediately before a data refresh.
+"""Freeze a complete NFL week's leaderboard after the authoritative data refresh.
 
-The scheduled refresh runs this script before replacing the source data. That
-preserves the ranking users actually saw before the refresh, so the next
-leaderboard can report movement from the previous visible data snapshot.
+The versioned weekly archive owns rank movement. Daily/browser refreshes never
+replace a finalized week, and the refresh baseline is not a weekly snapshot.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 import pandas as pd
-from streamlit.testing.v1 import AppTest
+from live_leaderboard_history import (
+    finalizable_week_key,
+    finalized_week_snapshot,
+    freeze_weekly_snapshot,
+    write_weekly_history,
+)
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -91,48 +94,41 @@ def replace_weekly_snapshot(
 
 
 def build_prior_week_snapshot(timeout_seconds: int = 240) -> tuple[str, int]:
+    """Compatibility entry point: finalize processed data, never the pre-refresh view."""
     games = pd.read_csv(GAMES_PATH, low_memory=False)
-    snapshot_week = latest_completed_regular_season_key(games)
-
-    with TemporaryDirectory(prefix="gini-leaderboard-baseline-") as temp_dir:
-        snapshot_path = Path(temp_dir) / "live_leaderboard_snapshot.csv"
-        os.environ["LIVE_LEADERBOARD_FORCE_SNAPSHOT"] = "1"
-        os.environ["LIVE_LEADERBOARD_SNAPSHOT_PATH"] = str(snapshot_path)
-        try:
-            app = AppTest.from_file(str(PAGE_PATH))
-            app.run(timeout=timeout_seconds)
-        finally:
-            os.environ.pop("LIVE_LEADERBOARD_FORCE_SNAPSHOT", None)
-            os.environ.pop("LIVE_LEADERBOARD_SNAPSHOT_PATH", None)
-
-        if app.exception:
-            messages = "; ".join(str(exception.value) for exception in app.exception)
-            raise RuntimeError(f"Live Leaderboard snapshot failed: {messages}")
-        if not snapshot_path.exists():
-            raise RuntimeError("Live Leaderboard did not produce a snapshot file.")
-
-        snapshot = pd.read_csv(snapshot_path, low_memory=False)
-    required = {"team", "live_rank", "live_market_score"}
-    missing = sorted(required.difference(snapshot.columns))
-    if missing:
-        raise ValueError(f"Leaderboard snapshot is missing required columns: {', '.join(missing)}")
-    if snapshot.empty or snapshot["team"].duplicated().any():
-        raise ValueError("Leaderboard snapshot must contain one row per ranked team.")
-
-    timestamp = datetime.now().astimezone().isoformat()
+    team_game = pd.read_csv(APP_DIR / "data" / "team_game_estat.csv", low_memory=False)
+    moment = datetime.now(timezone.utc)
+    snapshot_week = finalizable_week_key(games, team_game, moment)
+    if snapshot_week is None:
+        return "", 0
     history = (
         pd.read_csv(WEEKLY_HISTORY_PATH, low_memory=False)
         if WEEKLY_HISTORY_PATH.exists()
         else pd.DataFrame()
     )
-    baseline = snapshot.copy()
-    baseline["snapshot_week"] = snapshot_week
-    baseline["snapshot_timestamp"] = timestamp
-    REFRESH_BASELINE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    baseline.to_csv(REFRESH_BASELINE_PATH, index=False)
-    updated = replace_weekly_snapshot(history, snapshot, snapshot_week, timestamp)
-    WEEKLY_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    updated.to_csv(WEEKLY_HISTORY_PATH, index=False)
+    existing = finalized_week_snapshot(history, snapshot_week, games)
+    if not existing.empty:
+        return snapshot_week, len(existing)
+    from streamlit.testing.v1 import AppTest
+    prior_capture = os.environ.get("LIVE_LEADERBOARD_CAPTURE_ONLY")
+    os.environ["LIVE_LEADERBOARD_CAPTURE_ONLY"] = "1"
+    try:
+        app = AppTest.from_file(str(PAGE_PATH)).run(timeout=timeout_seconds)
+    finally:
+        if prior_capture is None:
+            os.environ.pop("LIVE_LEADERBOARD_CAPTURE_ONLY", None)
+        else:
+            os.environ["LIVE_LEADERBOARD_CAPTURE_ONLY"] = prior_capture
+    if app.exception:
+        raise RuntimeError("; ".join(str(error.value) for error in app.exception))
+    payload = app.session_state["live_leaderboard_capture_payload"]
+    if payload["weekly_snapshot_key"] != snapshot_week:
+        # A delayed run must not relabel a later calendar week's roster/model view.
+        return "", 0
+    snapshot = payload["leaderboard"]
+    updated, changed = freeze_weekly_snapshot(history, snapshot, snapshot_week, games, team_game, moment)
+    if changed:
+        write_weekly_history(updated, WEEKLY_HISTORY_PATH)
     return snapshot_week, len(snapshot)
 
 
@@ -142,7 +138,10 @@ def main() -> None:
     args = parser.parse_args()
 
     snapshot_week, team_count = build_prior_week_snapshot(args.timeout)
-    print(f"Saved {snapshot_week} leaderboard baseline for {team_count} teams.")
+    if snapshot_week:
+        print(f"Finalized archive: {snapshot_week}, {team_count} teams (existing finalized weeks stay frozen).")
+    else:
+        print("No NFL week is ready to finalize: waiting for complete, processed results and the 6am ET cutoff.")
 
 
 if __name__ == "__main__":

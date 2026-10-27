@@ -1,0 +1,59 @@
+{
+  "snapshot_validation": [
+    {
+      "week": 1,
+      "captured_rows": 32,
+      "authoritative_baseline_available": true
+    },
+    {
+      "week": 2,
+      "captured_rows": 32,
+      "authoritative_baseline_available": true
+    },
+    {
+      "week": 3,
+      "captured_rows": 32,
+      "authoritative_baseline_available": false
+    },
+    {
+      "week": 4,
+      "captured_rows": 0,
+      "authoritative_baseline_available": false
+    },
+    {
+      "week": 5,
+      "captured_rows": 32,
+      "authoritative_baseline_available": true
+    },
+    {
+      "week": 6,
+      "captured_rows": 0,
+      "authoritative_baseline_available": false
+    },
+    {
+      "week": 7,
+      "captured_rows": 0,
+      "authoritative_baseline_available": false
+    }
+  ],
+  "formula": "previous_week_rank - current_rank",
+  "baseline_excludes": [
+    "daily refresh baseline",
+    "reconstructed history",
+    "other seasons",
+    "nonadjacent weeks",
+    "incomplete populations"
+  ],
+  "validation": {
+    "tests_passed": 56,
+    "tested_streamlit": "1.58.0",
+    "viewports": [
+      390,
+      430,
+      768,
+      1920
+    ],
+    "desktop_card_height_pixels": 76,
+    "original_snapshot_csvs_unchanged": true
+  }
+}

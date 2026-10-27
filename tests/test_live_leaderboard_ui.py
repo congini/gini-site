@@ -16,6 +16,7 @@ def leaderboard_ui_app():
         "escape", "number", "pct", "ordinal", "current_record_text",
         "logo_source", "logo_html", "team_history_html", "render_leaderboard",
         "roster_strengths", "render_team_detail", "render_css",
+        "weekly_movement_html", "movement_arrow_svg",
     }
     colors = {"PRIMARY", "SECONDARY", "NAVY", "TEXT", "MUTED"}
     definitions = [
@@ -41,6 +42,8 @@ leaderboard = pd.DataFrame([{
     'highest_quadrant_probability': .6,
     'q1_probability': .1, 'q2_probability': .1,
     'q3_probability': .6, 'q4_probability': .2,
+    'weekly_rank_change': 3, 'weekly_movement_available': True,
+    'weekly_comparison_key': '2026-Week-06',
 }])
 period = st.query_params.get('leaderboard_week', '2026-Week-07')
 render_css()
@@ -57,6 +60,9 @@ def test_header_and_team_picker_render_and_navigate_without_runtime_errors():
     assert not app.exception
     assert app.selectbox(key="live_leaderboard_team_detail").value == "#1 Denver Broncos (DEN)"
     assert app.button(key="leaderboard-week-forward").disabled
+    cards = next(item.value for item in app.markdown if 'class="leaderboard-wrap"' in item.value)
+    assert 'weekly-up' in cards and 'High Upside' not in cards
+    assert 'Moved up 3 places from finalized Week 6' in cards
 
     app.button(key="leaderboard-week-back").click().run()
     assert not app.exception

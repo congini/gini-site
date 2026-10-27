@@ -50,9 +50,10 @@ jobs:
 
       - name: Refresh and validate current season
         run: |
-          python snapshot_live_leaderboard.py
           python update_live_sources.py --force
           python refresh_current_season.py --validate-only
+          # Freeze only after all of the week's results have been processed.
+          python snapshot_live_leaderboard.py
           python -m pytest -q
           git diff --check
 
