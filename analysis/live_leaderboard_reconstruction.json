@@ -1,0 +1,107 @@
+{
+  "runs": [
+    {
+      "season": 2026,
+      "version": "weekly-replay-v1",
+      "generated_at": "2026-10-26T23:32:25.309726+00:00",
+      "source_sha256": {
+        "data\\team_game_estat.csv": "7e2d6163eaa2fe50aba17f6d2658e97c7d8bee57240e0619a5c937dc379ecaf5",
+        "data\\team_season_estat.csv": "9b3b9b1499c09b22319914985b83165107aadb237c0aa382181bb0ccda5bed58",
+        "data\\live_sources\\contracts.csv": "94ed9db57781471c77c32e23f2a9a3621299cc80129bdaba2410d859efdbb9b3",
+        "data\\live_sources\\depth_charts.csv": "8190788fb72a0d1b8b335d465092e7eb57a209cb6c8572757b8248168c06900d",
+        "data\\live_sources\\draft_picks.csv": "91bea662a40c02d8bbb37d99b29760039593471cb39286d4eda33210591525f3",
+        "data\\live_sources\\injuries.csv": "75437ec35ad05e92e3b8f29b402b4d413ca6d6b1d7b227fb70f49afcf4ca993e",
+        "data\\live_sources\\players.csv": "0e32eeddceb5565dc7e865836822ad3dc53cfc1118b06e8e2d8b41c5173478e1",
+        "data\\live_sources\\player_prior_season_stats.csv": "9e6c28da20652ac28b2299108201ab75811e8ba6ac5f1046866a354a4ba4bf65",
+        "data\\live_sources\\player_season_stats.csv": "47407c5583b963d11ea29d27e5f74c1f59c563e6064bfdce35a82fb5334e9e8d",
+        "data\\live_sources\\schedules.csv": "09aaa9358b249064594403cb9ec6e09b4c259b954c8004a610cfda22e008e879",
+        "data\\live_sources\\snap_counts.csv": "7c6b0efc9bbfe994946c2637234b1fba65c7075b2aa80196d567fe1d983d8b85",
+        "data\\live_sources\\teams.csv": "a145a0c0775415190b2be6e47c65baac6ac312f0f3bf724ca90d8e116c6f5ebc",
+        "data\\live_sources\\weekly_rosters.csv": "bdf2b42e732c8a65a8a34ad6d1e67002d9eab7dcf0da836c489ffd72e1163cd1",
+        "data\\live_sources\\predictive_model_projection_debug.json": "5213dfa82d2fa3bbaf6a422a73c55259ae0e82eee7f2ab70b82efae795dbfd5d"
+      },
+      "captured_history_sha256": "d718215e67d5e5db958ad50ce36ec33ffa5ec785e81f3c5b65402283eedf8550",
+      "limitation": "Current methodology and revised inputs; not original captured rankings.",
+      "weeks": [
+        {
+          "snapshot_kind": "reconstructed",
+          "reconstruction_version": "weekly-replay-v1",
+          "data_through_week": 4,
+          "data_cutoff": "2026-10-06T03:59:59.999999999+00:00",
+          "game_count": 64,
+          "roster_rows": 2576,
+          "depth_rows": 608620,
+          "method": "Current Live Leaderboard formula, week-limited local data, current frozen preseason reference",
+          "week": 4,
+          "team_count": 32,
+          "top_five": [
+            {
+              "team": "JAX",
+              "live_rank": 1,
+              "live_market_score": 91.5333877220162
+            },
+            {
+              "team": "CHI",
+              "live_rank": 2,
+              "live_market_score": 91.11470103595661
+            },
+            {
+              "team": "SF",
+              "live_rank": 3,
+              "live_market_score": 90.88319122371095
+            },
+            {
+              "team": "KC",
+              "live_rank": 4,
+              "live_market_score": 88.9949647921787
+            },
+            {
+              "team": "SEA",
+              "live_rank": 5,
+              "live_market_score": 87.99177373967852
+            }
+          ]
+        },
+        {
+          "snapshot_kind": "reconstructed",
+          "reconstruction_version": "weekly-replay-v1",
+          "data_through_week": 6,
+          "data_cutoff": "2026-10-20T03:59:59.999999999+00:00",
+          "game_count": 93,
+          "roster_rows": 2596,
+          "depth_rows": 673227,
+          "method": "Current Live Leaderboard formula, week-limited local data, current frozen preseason reference",
+          "week": 6,
+          "team_count": 32,
+          "top_five": [
+            {
+              "team": "SF",
+              "live_rank": 1,
+              "live_market_score": 92.89636494952141
+            },
+            {
+              "team": "KC",
+              "live_rank": 2,
+              "live_market_score": 90.62388643175174
+            },
+            {
+              "team": "JAX",
+              "live_rank": 3,
+              "live_market_score": 89.83428059651453
+            },
+            {
+              "team": "MIN",
+              "live_rank": 4,
+              "live_market_score": 88.62399145184591
+            },
+            {
+              "team": "NE",
+              "live_rank": 5,
+              "live_market_score": 87.12498250826235
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -59,6 +59,15 @@ from live_source_refresh import (
     refresh_live_sources_if_needed as run_live_source_refresh_if_needed,
 )
 from live_leaderboard_stabilization import stabilize_live_performance
+from live_leaderboard_history import (
+    available_snapshot_keys,
+    build_team_history,
+    combine_recorded_and_reconstructed,
+    parse_week_key,
+    snapshot_leaderboard,
+    week_label,
+)
+from live_leaderboard_replay import prepare_replay_inputs
 from season_utils import (
     comparable_ranked_populations,
     current_projected_finish_table,
@@ -314,6 +323,17 @@ def ordinal(value):
     return f"{number_value}{suffix}"
 
 
+def current_record_text(row):
+    """Format a team's completed regular-season record for display."""
+    wins = pd.to_numeric(row.get("current_wins"), errors="coerce")
+    losses = pd.to_numeric(row.get("current_losses"), errors="coerce")
+    ties = pd.to_numeric(row.get("current_ties"), errors="coerce")
+    if pd.isna(wins) or pd.isna(losses):
+        return "Record unavailable"
+    record = f"{int(wins)}-{int(losses)}"
+    return f"{record}-{int(ties)}" if not pd.isna(ties) and int(ties) > 0 else record
+
+
 def safe_read_csv(path):
     path = Path(path)
     if not path.exists():
@@ -428,7 +448,7 @@ def load_data(file_signature=None):
 
 
 @st.cache_data(show_spinner=False)
-def build_live_leaderboard_payload(file_signature):
+def build_live_leaderboard_payload(file_signature, replay_season=None, replay_week=None):
     timings = {}
 
     def mark_timing(label, start_time):
@@ -437,6 +457,11 @@ def build_live_leaderboard_payload(file_signature):
     step_start = perf_counter()
     data, future_data, future_status, future_sources, load_messages, load_time, source_mtime = load_data(file_signature)
     mark_timing("load_data", step_start)
+    reconstruction_metadata = {}
+    if replay_week is not None:
+        data, future_data, reconstruction_metadata = prepare_replay_inputs(
+            data, future_data, int(replay_season), int(replay_week)
+        )
 
     team_season = data.get("team_season", pd.DataFrame())
     team_game = data.get("team_game", pd.DataFrame())
@@ -475,6 +500,10 @@ def build_live_leaderboard_payload(file_signature):
         selected_season,
         schedule_for_period,
     )
+    if replay_week is not None:
+        weekly_snapshot_key = f"{int(replay_season)}-Week-{int(replay_week):02d}"
+        weekly_snapshot_year = int(replay_season)
+        weekly_snapshot_period = f"Week {int(replay_week)}"
 
     step_start = perf_counter()
     player_stats, production_found = roster_scoring.load_player_stats(future_data)
@@ -586,6 +615,7 @@ def build_live_leaderboard_payload(file_signature):
         "has_snapshot": False,
         "build_timings": timings,
         "team_season_empty": False,
+        "reconstruction_metadata": reconstruction_metadata,
     }
 
 
@@ -2532,62 +2562,14 @@ def render_live_status_strip(selected_season, weekly_snapshot_period, leaderboar
     best = leaderboard.sort_values("live_rank", ascending=True).iloc[0]
     worst = leaderboard.sort_values("live_rank", ascending=False).iloc[0]
 
-    risers = leaderboard[pd.to_numeric(leaderboard["rank_change"], errors="coerce") > 0].copy()
-    fallers = leaderboard[pd.to_numeric(leaderboard["rank_change"], errors="coerce") < 0].copy()
-
-    if risers.empty:
-        riser = best
-    else:
-        riser = risers.sort_values("rank_change", ascending=False).iloc[0]
-
-    if fallers.empty:
-        faller = worst
-    else:
-        faller = fallers.sort_values("rank_change", ascending=True).iloc[0]
-
-    def movement_amount(row):
-        value = pd.to_numeric(row.get("rank_change", 0), errors="coerce")
-        return 0 if pd.isna(value) else int(abs(value))
-
     def card_style(row):
         return (
             f'--card-accent:{escape(row.get("team_primary_color", PRIMARY))};'
             f'--card-accent2:{escape(row.get("team_secondary_color", SECONDARY))};'
         )
 
-    riser_change = movement_amount(riser)
-    faller_change = movement_amount(faller)
-
-    riser_text = str(riser_change) if riser_change else "0"
-    faller_text = str(faller_change) if faller_change else "0"
-    riser_icon = movement_arrow_svg("up" if riser_change else "flat", "movement-icon")
-    faller_icon = movement_arrow_svg("down" if faller_change else "flat", "movement-icon")
-    riser_label = "Riser of Week" if has_snapshot else "Movement Pending"
-    faller_label = "Faller of Week" if has_snapshot else "Movement Pending"
-    movement_unit = "spots" if has_snapshot else "no baseline"
-    if not has_snapshot:
-        riser_text = "—"
-        faller_text = "—"
-
-    def record_text(row):
-        wins = pd.to_numeric(row.get("current_wins"), errors="coerce")
-        losses = pd.to_numeric(row.get("current_losses"), errors="coerce")
-        ties = pd.to_numeric(row.get("current_ties"), errors="coerce")
-
-        if pd.isna(wins) or pd.isna(losses):
-            return "Record unavailable"
-
-        wins = int(wins)
-        losses = int(losses)
-        ties = 0 if pd.isna(ties) else int(ties)
-
-        if ties > 0:
-            return f"{wins}-{losses}-{ties}"
-
-        return f"{wins}-{losses}"
-
-    best_record = record_text(best)
-    worst_record = record_text(worst)
+    best_record = current_record_text(best)
+    worst_record = current_record_text(worst)
 
     st.markdown(
         "\n".join(line for line in f"""
@@ -2678,7 +2660,7 @@ def render_live_status_strip(selected_season, weekly_snapshot_period, leaderboar
 
 .status-right {{
     display:grid;
-    grid-template-columns:repeat(4, minmax(0, 1fr));
+    grid-template-columns:repeat(2, minmax(0, 1fr));
     gap:.72rem;
     align-items:stretch;
 }}
@@ -2999,7 +2981,7 @@ def render_live_status_strip(selected_season, weekly_snapshot_period, leaderboar
     <div class="hero-section">
         <div class="hero-kicker">Live Team Market</div>
         <div class="hero-title">Live Leaderboard</div>
-        <div class="hero-copy">A current-moment ranking using Gini performance, roster strength, projected wins, Super Square profile, and weekly movement. During the season, teams enter after their first completed game.</div>
+        <div class="hero-copy">A current-moment ranking using Gini performance, roster strength, projected wins, and Super Square profile. Use the arrows beside the week to revisit weekly leaderboards.</div>
     </div>
 
     <div class="section-divider"></div>
@@ -3020,40 +3002,19 @@ def render_live_status_strip(selected_season, weekly_snapshot_period, leaderboar
 
         <div class="status-right">
             <div class="headline-card" style="{card_style(best)}">
-                <div class="headline-label">Current Best</div>
+                <div class="headline-label">Top Ranked</div>
                 <div class="headline-logo-wrap">{logo_html(best["team"], best.get("team_logo", ""), "headline-logo")}</div>
                 <div class="headline-team">{escape(best["team_name"])}</div>
                 <div class="record-badge"><span>Record</span>{escape(best_record)}</div>
             </div>
 
             <div class="headline-card" style="{card_style(worst)}">
-                <div class="headline-label">Current Worst</div>
+                <div class="headline-label">Bottom Ranked</div>
                 <div class="headline-logo-wrap">{logo_html(worst["team"], worst.get("team_logo", ""), "headline-logo")}</div>
                 <div class="headline-team">{escape(worst["team_name"])}</div>
                 <div class="record-badge"><span>Record</span>{escape(worst_record)}</div>
             </div>
 
-            <div class="headline-card" style="{card_style(riser)}">
-                <div class="headline-label">{escape(riser_label)}</div>
-                <div class="headline-logo-wrap">{logo_html(riser["team"], riser.get("team_logo", ""), "headline-logo")}</div>
-                <div class="headline-team">{escape(riser["team_name"])}</div>
-                <div class="movement-indicator movement-up">
-                    {riser_icon}
-                    <span class="movement-value">{escape(riser_text)}</span>
-                    <span class="movement-label">{escape(movement_unit)}</span>
-                </div>
-            </div>
-
-            <div class="headline-card" style="{card_style(faller)}">
-                <div class="headline-label">{escape(faller_label)}</div>
-                <div class="headline-logo-wrap">{logo_html(faller["team"], faller.get("team_logo", ""), "headline-logo")}</div>
-                <div class="headline-team">{escape(faller["team_name"])}</div>
-                <div class="movement-indicator movement-down">
-                    {faller_icon}
-                    <span class="movement-value">{escape(faller_text)}</span>
-                    <span class="movement-label">{escape(movement_unit)}</span>
-                </div>
-            </div>
         </div>
     </div>
 </div>
@@ -3062,32 +3023,121 @@ def render_live_status_strip(selected_season, weekly_snapshot_period, leaderboar
     )
 
 
-def render_leaderboard(leaderboard):
-    rows = []
-    for _, row in leaderboard.iterrows():
-        team = row["team"]
-        rank_change = row.get("rank_change")
-        direction = movement_direction(rank_change)
-        movement_html = movement_rank_html(rank_change)
-        score_change = row.get("score_change")
-        score_text = "+0.0" if pd.isna(score_change) else f"{score_change:+.1f}"
-        move_class = f"move-{direction}"
-        rows.append(
+def team_history_html(team, team_history, logo_lookup):
+    history = team_history[team_history["team"].eq(team)].sort_values("week")
+    if history.empty:
+        return '<div class="history-empty">No weekly history is available yet.</div>'
+
+    cards = []
+    for _, history_row in history.iterrows():
+        opponent = str(history_row.get("opponent", "BYE") or "BYE")
+        result = str(history_row.get("result", "Bye") or "Bye")
+        result_class = {"W": "history-win", "L": "history-loss", "T": "history-tie"}.get(result, "history-bye")
+        score_line = str(history_row.get("score_line", "") or "")
+        venue = str(history_row.get("home_away", "") or "")
+        if opponent == "BYE":
+            opponent_html = '<div class="history-opponent history-bye-label">Bye week</div>'
+        else:
+            opponent_logo = logo_html(opponent, logo_lookup.get(opponent, ""), "history-opponent-logo")
+            opponent_html = (
+                f'<div class="history-opponent">{opponent_logo}'
+                f'<span>{escape(venue)} {escape(opponent)}</span></div>'
+            )
+        result_text = "Bye" if result == "Bye" else f"{result} {score_line}".strip()
+        cards.append(
             f"""
-<div class="leader-row" style="--team-primary:{escape(row.get("team_primary_color", PRIMARY))};--team-secondary:{escape(row.get("team_secondary_color", SECONDARY))};">
-  <div class="rank-cell">{int(row["live_rank"])}</div>
-  <div class="team-cell"><div class="row-logo-wrap">{logo_html(team, row.get("team_logo", ""), "row-logo")}</div><div><div class="team-name">{escape(row["team_name"])}</div><div class="team-abbr">{escape(team)}</div></div></div>
-  <div class="score-cell"><div class="score-value">{number(row["live_market_score"])}</div><div class="score-label">Live Score</div></div>
-  <div class="mini-cell gini-cell"><b>{number(row["current_gini_score"])}</b><span>Gini</span></div>
-  <div class="mini-cell roster-cell"><b>{number(row["roster_score"])}</b><span>Roster</span></div>
-  <div class="mini-cell wins-cell"><b>{number(row["projected_wins"])}</b><span>Wins</span></div>
-  <div class="quad-cell"><b>{escape(str(row["most_likely_quadrant"]).replace(" - ", " "))}</b><span>{pct(row["highest_quadrant_probability"])} current profile probability</span></div>
-  <div class="move-cell {move_class}"><b>{movement_html}</b><span>{escape(score_text)}</span></div>
-  <div class="status-pill">{escape(row["status_label"])}</div>
+<div class="history-week-card">
+  <div class="history-week-label">Week {int(history_row['week'])}</div>
+  <div class="history-rank">#{int(history_row['live_rank'])}</div>
+  <div class="history-score">{number(history_row['live_market_score'])}<span>Live Score</span></div>
+  {opponent_html}
+  <div class="history-result {result_class}">{escape(result_text)}</div>
 </div>
 """
         )
-    st.markdown(f'<div class="section-heading">Current Leaderboard</div><div class="leaderboard-wrap">{"".join(rows)}</div>', unsafe_allow_html=True)
+    return (
+        '<div class="history-panel">'
+        '<div class="history-panel-title">Weekly leaderboard history</div>'
+        '<div class="history-panel-subtitle">Week-by-week ranks, Live Scores, and game results.</div>'
+        f'<div class="history-grid">{"".join(cards)}</div>'
+        '</div>'
+    )
+
+
+def render_leaderboard(
+    leaderboard,
+    team_history,
+    view_label,
+    selected_period_key,
+    ordered_period_keys,
+):
+    selected_index = ordered_period_keys.index(selected_period_key)
+    season = int(leaderboard["season"].iloc[0])
+    older_key = ordered_period_keys[selected_index + 1] if selected_index + 1 < len(ordered_period_keys) else None
+    newer_key = ordered_period_keys[selected_index - 1] if selected_index > 0 else None
+
+    def select_week(snapshot_key):
+        # A Streamlit callback changes the view within this session. HTML links
+        # can be intercepted by the host browser and open an additional tab.
+        st.query_params["leaderboard_week"] = snapshot_key
+
+    with st.container(key="leaderboard-titlebar", horizontal=True, wrap=False, vertical_alignment="center"):
+        st.markdown(
+            '<div id="leaderboard" class="section-heading leaderboard-heading">'
+            f'{escape(view_label)} Leaderboard</div>',
+            unsafe_allow_html=True,
+            width="stretch",
+        )
+        with st.container(key="leaderboard-week-controls", width="content", horizontal=True, wrap=False, gap=None, vertical_alignment="center"):
+            st.button(
+                "Previous week", icon=":material/chevron_left:", key="leaderboard-week-back",
+                help="View the previous leaderboard week" if older_key else "Earliest available week",
+                type="tertiary", disabled=older_key is None,
+                on_click=select_week, args=(older_key,),
+            )
+            st.markdown(
+                f'<div class="week-nav-label">{escape(week_label(selected_period_key))}</div>',
+                unsafe_allow_html=True, width="content",
+            )
+            st.button(
+                "Next week", icon=":material/chevron_right:", key="leaderboard-week-forward",
+                help="View the next leaderboard week" if newer_key else "Latest available week",
+                type="tertiary", disabled=newer_key is None,
+                on_click=select_week, args=(newer_key,),
+            )
+        st.markdown(
+            f'<div class="leaderboard-season">{season} season</div>',
+            unsafe_allow_html=True,
+            width="stretch",
+        )
+    logo_lookup = dict(zip(leaderboard["team"], leaderboard["team_logo"]))
+    rows = []
+    for _, row in leaderboard.iterrows():
+        team = row["team"]
+        current_record = current_record_text(row)
+        history_html = team_history_html(team, team_history, logo_lookup)
+        rows.append(
+            f"""
+<details class="leader-row" style="--team-primary:{escape(row.get("team_primary_color", PRIMARY))};--team-secondary:{escape(row.get("team_secondary_color", SECONDARY))};">
+ <summary class="leader-summary">
+  <div class="rank-cell">{int(row["live_rank"])}</div>
+  <div class="team-cell"><div class="row-logo-wrap">{logo_html(team, row.get("team_logo", ""), "row-logo")}</div><div><div class="team-name team-name-action">{escape(row["team_name"])}</div><div class="team-abbr">{escape(team)} · View weekly history</div></div></div>
+  <div class="score-cell"><div class="score-value">{number(row["live_market_score"])}</div><div class="score-label">Live Score</div></div>
+  <div class="mini-cell gini-cell"><b>{number(row["current_gini_score"])}</b><span>Gini</span></div>
+  <div class="mini-cell roster-cell"><b>{number(row["roster_score"])}</b><span>Roster</span></div>
+  <div class="mini-cell wins-cell"><b>{number(row["projected_wins"])}</b><span>Projected Wins</span></div>
+  <div class="record-cell"><b>{escape(current_record)}</b><span>Current Record</span></div>
+  <div class="status-pill">{escape(row.get("status_label", "Snapshot"))}</div>
+  <div class="history-chevron" aria-hidden="true"></div>
+ </summary>
+ {history_html}
+</details>
+"""
+        )
+    st.markdown(
+        f'<div class="leaderboard-wrap">{"".join(rows)}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def mover_card(row, reason):
@@ -3139,14 +3189,19 @@ def roster_strengths(row):
 
 def render_team_detail(leaderboard, production_found):
     labels = [f"#{int(row.live_rank)} {row.team_name} ({row.team})" for row in leaderboard.itertuples()]
-    selected_label = st.selectbox(
-        "Team Detail",
-        labels,
-        index=0,
-        key="live_leaderboard_team_detail",
-        width="stretch",
-        label_visibility="collapsed",
-    )
+    with st.container(key="team-detail-toolbar", horizontal=True, wrap=False, vertical_alignment="center"):
+        st.markdown(
+            '<div class="section-heading detail-section-heading">Current Team Detail</div>',
+            unsafe_allow_html=True, width="stretch",
+        )
+        selected_label = st.selectbox(
+            "Team Detail",
+            labels,
+            index=0,
+            key="live_leaderboard_team_detail",
+            width=400,
+            label_visibility="collapsed",
+        )
     selected_team = selected_label.split("(")[-1].replace(")", "").strip()
     row = leaderboard[leaderboard["team"] == selected_team].iloc[0]
     strength, concern = roster_strengths(row)
@@ -3552,10 +3607,57 @@ def render_css():
     font-size:1rem;
     font-weight:950;
 }}
+.st-key-leaderboard-titlebar{{--week-nav-width:150px;--week-nav-height:36px;--week-arrow-size:30px;--week-row-height:32px;box-sizing:border-box;display:grid!important;grid-template-columns:minmax(0,1fr) var(--week-nav-width) minmax(0,1fr);align-items:center!important;padding:.7rem 1rem!important;margin:1.1rem 0 .7rem;gap:1rem!important;border:1px solid rgba(148,163,184,.24);border-radius:16px;background:rgba(255,255,255,.80);box-shadow:0 4px 16px rgba(15,23,42,.035);backdrop-filter:blur(12px);}}
+.st-key-leaderboard-titlebar > div{{min-width:0!important;width:100%!important;}}
+.st-key-leaderboard-titlebar > div:has(.st-key-leaderboard-week-controls){{height:var(--week-nav-height)!important;}}
+.st-key-leaderboard-titlebar [data-testid="stMarkdownContainer"]{{margin:0!important;}}
+/* Native horizontal containers otherwise reserve scrollbars inside this small control. */
+.st-key-leaderboard-titlebar,.st-key-leaderboard-week-controls{{overflow:visible!important;scrollbar-gutter:auto;}}
+.leaderboard-heading{{margin:0!important;padding-left:.75rem;border-left:4px solid {PRIMARY};}}
+.leaderboard-heading:after{{display:none!important;}}
+.leaderboard-season{{color:#64748B;font-size:.73rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;text-align:right;}}
+.st-key-leaderboard-week-controls{{box-sizing:border-box;display:grid!important;grid-template-columns:var(--week-arrow-size) minmax(0,1fr) var(--week-arrow-size);grid-template-rows:var(--week-row-height);align-items:center!important;align-content:center;gap:0!important;width:var(--week-nav-width)!important;height:var(--week-nav-height)!important;min-height:var(--week-nav-height)!important;max-height:var(--week-nav-height)!important;margin:0!important;padding:2px 0;background:transparent;border:0;box-shadow:none;}}
+.st-key-leaderboard-week-controls > div{{min-width:0!important;width:100%!important;}}
+.st-key-leaderboard-week-controls [data-testid="stMarkdownContainer"]{{margin:0!important;}}
+.st-key-leaderboard-week-controls [data-testid="stMarkdownContainer"] p{{margin:0;line-height:1.25;text-align:center;}}
+.st-key-leaderboard-week-controls button{{position:relative;display:inline-flex;align-items:center;justify-content:center;width:var(--week-arrow-size);min-width:var(--week-arrow-size);height:var(--week-row-height);min-height:var(--week-row-height);gap:0!important;padding:0;border:1px solid rgba(148,163,184,.16);border-radius:8px;background:rgba(226,232,240,.38);color:#334155;transition:background .16s ease,border-color .16s ease,color .16s ease;}}
+/* Remove the native icon-to-label gap even when the accessible label is clipped. */
+.st-key-leaderboard-week-controls button [data-has-shortcut]{{gap:0!important;}}
+/* Keep descriptive native button names for keyboard and screen-reader users. */
+.st-key-leaderboard-week-controls button p{{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;}}
+.st-key-leaderboard-week-controls button [data-testid="stIconMaterial"]{{font-size:20px;}}
+.st-key-leaderboard-week-controls button:not(:disabled):hover{{background:rgba(0,115,183,.10);border-color:rgba(0,115,183,.25);color:{SECONDARY};}}
+.st-key-leaderboard-week-controls button:focus-visible{{outline:3px solid rgba(0,115,183,.28);outline-offset:1px;}}
+.st-key-leaderboard-week-controls button:disabled{{opacity:.60;background:transparent;border-color:transparent;color:#94A3B8!important;}}
+.week-nav-label{{display:flex;align-items:center;justify-content:center;min-width:0;height:var(--week-row-height);line-height:1;color:{TEXT};font-size:.94rem;font-weight:850;letter-spacing:-.015em;text-align:center;white-space:nowrap;}}
 .section-heading{{color:{TEXT};font-size:1.32rem;font-weight:950;margin:1.1rem 0 .7rem;}}
 .section-heading:after{{content:"";display:block;width:58px;height:4px;border-radius:999px;margin-top:.45rem;background:linear-gradient(90deg,{PRIMARY},{SECONDARY});}}
 .leaderboard-wrap{{display:grid;gap:.55rem;}}
-.leader-row{{box-sizing:border-box;width:100%;min-width:0;display:grid;grid-template-columns:48px minmax(220px,1.6fr) 112px 88px 88px 88px minmax(220px,1.25fr) 82px 126px;gap:.7rem;align-items:center;min-height:76px;padding:.7rem .78rem;border-radius:16px;background:rgba(255,255,255,.92);border:1px solid rgba(15,23,42,.10);border-left:5px solid var(--team-primary);box-shadow:0 10px 24px rgba(15,23,42,.055);}}
+.st-key-team-detail-toolbar{{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(280px,400px);align-items:center!important;gap:1.5rem!important;overflow:visible!important;padding:0!important;margin:1.8rem 0 .35rem;}}
+.st-key-team-detail-toolbar > div{{min-width:0!important;width:100%!important;}}
+.st-key-team-detail-toolbar [data-testid="stMarkdownContainer"]{{margin:0!important;}}
+.detail-section-heading{{margin:0!important;}}
+.st-key-live_leaderboard_team_detail{{min-width:0;}}
+.st-key-live_leaderboard_team_detail .react-aria-ComboBox > [role="group"]{{box-sizing:border-box;min-height:48px;border-radius:13px;border:1px solid rgba(148,163,184,.40)!important;background:#FFFFFF!important;box-shadow:0 3px 10px rgba(15,23,42,.045);transition:border-color .16s ease,box-shadow .16s ease;}}
+.st-key-live_leaderboard_team_detail .react-aria-ComboBox > [role="group"]:hover{{border-color:rgba(0,115,183,.40)!important;}}
+.st-key-live_leaderboard_team_detail .react-aria-ComboBox > [role="group"]:focus-within{{border-color:{SECONDARY}!important;box-shadow:0 0 0 3px rgba(0,115,183,.10);}}
+.st-key-live_leaderboard_team_detail input[role="combobox"]{{min-width:0;background:transparent!important;color:{TEXT}!important;-webkit-text-fill-color:{TEXT}!important;font-size:.91rem;font-weight:750;padding:.7rem .9rem!important;}}
+.st-key-live_leaderboard_team_detail [role="group"] > button{{background:transparent!important;color:#64748B!important;border:0!important;border-radius:0 12px 12px 0;}}
+.st-key-live_leaderboard_team_detail [role="group"] > button:hover{{color:{SECONDARY}!important;}}
+/* React Aria renders the option menu in a portal, outside the widget wrapper. */
+[data-testid="stSelectboxVirtualDropdown"]:has([role="listbox"][aria-label="Team Detail"]){{background:#FFFFFF!important;border:1px solid rgba(148,163,184,.30);border-radius:13px;box-shadow:0 14px 34px rgba(15,23,42,.13);overflow:hidden;}}
+[role="listbox"][aria-label="Team Detail"]{{background:#FFFFFF!important;color:{TEXT}!important;}}
+[role="listbox"][aria-label="Team Detail"] [role="option"]{{background:#FFFFFF;color:{TEXT}!important;}}
+[role="listbox"][aria-label="Team Detail"] [role="option"][data-focused="true"],
+[role="listbox"][aria-label="Team Detail"] [role="option"]:hover{{background:#EFF6FB!important;}}
+[role="listbox"][aria-label="Team Detail"] [role="option"][aria-selected="true"]{{background:#EAF4FB!important;color:{SECONDARY}!important;}}
+.leader-row{{box-sizing:border-box;width:100%;min-width:0;border-radius:16px;background:rgba(255,255,255,.92);border:1px solid rgba(15,23,42,.10);border-left:5px solid var(--team-primary);box-shadow:0 10px 24px rgba(15,23,42,.055);overflow:hidden;}}
+.leader-summary{{position:relative;box-sizing:border-box;width:100%;min-width:0;display:grid;grid-template-columns:48px minmax(220px,1.6fr) 112px 88px 88px 104px minmax(150px,.9fr) 126px 24px;gap:.7rem;align-items:center;min-height:76px;padding:.7rem .78rem;cursor:pointer;list-style:none;}}
+.leader-summary::-webkit-details-marker{{display:none;}}
+.leader-summary::marker{{display:none;content:"";}}
+.leader-summary:hover{{background:rgba(248,250,252,.72);}}
+.leader-summary:focus-visible{{outline:3px solid rgba(0,115,183,.34);outline-offset:-3px;}}
+.leader-row[open] .leader-summary{{border-bottom:1px solid rgba(15,23,42,.09);background:rgba(248,250,252,.78);}}
 .rank-cell{{display:flex;align-items:center;justify-content:center;width:42px;height:42px;border-radius:12px;color:white;background:linear-gradient(135deg,var(--team-primary),var(--team-secondary));font-size:1.05rem;font-weight:950;}}
 .team-cell,.detail-header,.mover-item{{display:flex;align-items:center;gap:.72rem;min-width:0;}}
 .row-logo-wrap{{width:48px;height:48px;flex:0 0 48px;display:flex;align-items:center;justify-content:center;}}
@@ -3563,10 +3665,11 @@ def render_css():
 .row-logo,.team-logo{{display:block;max-width:46px;max-height:46px;object-fit:contain;object-position:center center;filter:drop-shadow(0 6px 10px rgba(15,23,42,.14));}}
 .logo-fallback{{width:42px;height:42px;border-radius:50%;background:{NAVY};color:white;font-size:.75rem;font-weight:950;display:flex;align-items:center;justify-content:center;}}
 .team-name{{color:{TEXT};font-size:.98rem;line-height:1.15;font-weight:950;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}}
-.team-abbr,.score-label,.mini-cell span,.quad-cell span,.move-cell span,.mover-reason,.detail-subtitle{{color:{MUTED};font-size:.76rem;line-height:1.25;font-weight:750;}}
+.team-name-action{{text-decoration:underline;text-decoration-color:rgba(0,115,183,.34);text-underline-offset:3px;}}
+.team-abbr,.score-label,.mini-cell span,.record-cell span,.mover-reason,.detail-subtitle{{color:{MUTED};font-size:.76rem;line-height:1.25;font-weight:750;}}
 .score-value{{color:{TEXT};font-size:1.38rem;line-height:1;font-weight:950;}}
-.mini-cell b,.quad-cell b,.move-cell b{{display:block;color:{TEXT};font-size:.96rem;line-height:1.15;font-weight:950;}}
-.quad-cell b{{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}}
+.mini-cell b,.record-cell b{{display:block;color:{TEXT};font-size:.96rem;line-height:1.15;font-weight:950;}}
+.record-cell b{{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}}
 .movement-rank{{display:inline-flex;align-items:center;gap:.24rem;white-space:nowrap;}}
 .movement-arrow,.mover-arrow{{display:block;width:15px;height:15px;flex:0 0 15px;}}
 .mover-arrow{{width:14px;height:14px;flex-basis:14px;}}
@@ -3579,6 +3682,26 @@ def render_css():
 .movement-flat-mark{{display:block;min-width:15px;text-align:center;color:#64748B;font-size:1rem;line-height:1;font-weight:950;}}
 .move-up b{{color:#15803D;}}.move-down b{{color:#DC2626;}}.move-flat b{{color:#475569;}}
 .status-pill{{justify-self:start;display:inline-flex;align-items:center;justify-content:center;min-height:30px;padding:.35rem .62rem;border-radius:999px;background:rgba(15,23,42,.06);color:{TEXT};font-size:.78rem;font-weight:950;white-space:nowrap;}}
+.history-chevron{{width:20px;height:20px;position:relative;justify-self:end;color:#64748B;}}
+.history-chevron::before,.history-chevron::after{{content:"";position:absolute;left:4px;right:4px;top:9px;height:2px;border-radius:2px;background:currentColor;transition:transform .18s ease;}}
+.history-chevron::after{{transform:rotate(90deg);}}
+.leader-row[open] .history-chevron::after{{transform:rotate(0deg);}}
+.history-panel{{padding:.9rem 1rem 1rem;background:linear-gradient(180deg,rgba(248,250,252,.96),rgba(255,255,255,.98));}}
+.history-panel-title{{color:{TEXT};font-size:.92rem;font-weight:950;}}
+.history-panel-subtitle{{color:{MUTED};font-size:.74rem;font-weight:750;margin:.12rem 0 .72rem;}}
+.history-grid{{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(142px,1fr);gap:.55rem;overflow-x:auto;padding-bottom:.3rem;scrollbar-width:thin;}}
+.history-week-card{{min-height:142px;padding:.68rem;border-radius:12px;background:white;border:1px solid rgba(15,23,42,.09);box-shadow:0 6px 16px rgba(15,23,42,.045);}}
+.history-week-label{{color:{MUTED};font-size:.68rem;font-weight:950;text-transform:uppercase;letter-spacing:.07em;}}
+.history-rank{{color:{TEXT};font-size:1.35rem;font-weight:950;line-height:1;margin-top:.35rem;}}
+.history-score{{color:#334155;font-size:.86rem;font-weight:900;margin-top:.26rem;}}
+.history-score span{{display:block;color:{MUTED};font-size:.64rem;font-weight:750;}}
+.history-opponent{{display:flex;align-items:center;gap:.38rem;color:#334155;font-size:.76rem;font-weight:850;margin-top:.55rem;min-height:25px;}}
+.history-opponent-logo{{display:block;max-width:24px;max-height:24px;object-fit:contain;}}
+.history-opponent-logo.logo-fallback{{width:24px;height:24px;font-size:.52rem;}}
+.history-bye-label{{color:{MUTED};}}
+.history-result{{display:inline-flex;align-items:center;justify-content:center;min-height:24px;margin-top:.42rem;padding:0 .48rem;border-radius:999px;font-size:.70rem;font-weight:950;}}
+.history-win{{color:#166534;background:#DCFCE7;}}.history-loss{{color:#991B1B;background:#FEE2E2;}}.history-tie{{color:#854D0E;background:#FEF9C3;}}.history-bye{{color:#475569;background:#E2E8F0;}}
+.history-empty{{padding:.85rem 1rem;color:{MUTED};font-size:.82rem;font-weight:800;}}
 .movers-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;margin:1rem 0 1.25rem;}}
 .market-card,.team-detail-card{{padding:1rem;border-radius:16px;background:rgba(255,255,255,.88);border:1px solid rgba(15,23,42,.10);box-shadow:0 12px 28px rgba(15,23,42,.065);}}
 .card-title{{color:{TEXT};font-size:1rem;font-weight:950;margin-bottom:.75rem;}}
@@ -3882,11 +4005,11 @@ div[data-testid="stSelectbox"] [data-baseweb="select"]>div{{background-color:whi
 div[data-testid="stSelectbox"] [data-baseweb="select"] *{{color:{TEXT}!important;}}
 div[data-testid="stSelectbox"] [data-baseweb="select"] input{{color:{TEXT}!important;-webkit-text-fill-color:{TEXT}!important;}}
 @media(max-width:1100px){{
-    .leader-row{{
-        grid-template-columns:44px minmax(180px,1.45fr) 92px repeat(3,minmax(64px,.62fr));
+    .leader-summary{{
+        grid-template-columns:44px minmax(180px,1.45fr) 92px repeat(3,minmax(64px,.62fr)) 28px;
         grid-template-areas:
-            "rank team score gini roster wins"
-            ". quad quad move status status";
+            "rank team score gini roster wins chevron"
+            ". record record status status status chevron";
         row-gap:.72rem;
     }}
     .rank-cell{{grid-area:rank;}}
@@ -3895,31 +4018,32 @@ div[data-testid="stSelectbox"] [data-baseweb="select"] input{{color:{TEXT}!impor
     .gini-cell{{grid-area:gini;}}
     .roster-cell{{grid-area:roster;}}
     .wins-cell{{grid-area:wins;}}
-    .quad-cell{{grid-area:quad;}}
-    .move-cell{{grid-area:move;}}
+    .record-cell{{grid-area:record;}}
     .status-pill{{grid-area:status;}}
+    .history-chevron{{grid-area:chevron;}}
     .detail-grid{{grid-template-columns:repeat(3,minmax(0,1fr));}}
 }}
 @media(max-width:780px){{
+    .st-key-team-detail-toolbar{{grid-template-columns:minmax(0,1fr);gap:.85rem!important;margin-top:1.4rem;}}
     .live-page{{margin:-1.05rem auto 0;padding:0 .45rem 2rem;}}
     .leader-hero{{padding:1.25rem 1rem;border-radius:16px 16px 0 0;}}
     .hero-title{{font-size:clamp(1.85rem,10vw,2.45rem);}}
     .hero-copy{{font-size:.9rem;}}
     .market-pills .live-time-pill{{width:100%;white-space:normal;text-align:center;line-height:1.25;padding:.65rem .85rem;}}
     .current-season-left{{gap:1rem;flex-wrap:wrap;}}
-    .leader-row{{
-        grid-template-columns:44px minmax(170px,1.4fr) repeat(2,minmax(78px,.72fr));
+    .leader-summary{{
+        grid-template-columns:44px minmax(170px,1.4fr) repeat(2,minmax(78px,.72fr)) 28px;
         grid-template-areas:
-            "rank team score move"
-            ". quad gini roster"
-            ". quad wins status";
+            "rank team score status chevron"
+            ". record gini roster chevron"
+            ". record wins wins chevron";
         gap:.62rem .72rem;
         min-height:0;
         padding:.78rem;
         border-radius:14px;
     }}
     .team-name{{white-space:normal;}}
-    .score-cell,.mini-cell,.quad-cell,.move-cell,.status-pill{{min-width:0;}}
+    .score-cell,.mini-cell,.record-cell,.status-pill{{min-width:0;}}
     .movers-grid,.source-status-card,.source-files-card,.refresh-detail-grid,.source-found-grid{{grid-template-columns:1fr;}}
     .detail-grid{{grid-template-columns:repeat(2,minmax(0,1fr));}}
     .prob-row{{grid-template-columns:repeat(2,minmax(0,1fr));}}
@@ -3929,15 +4053,18 @@ div[data-testid="stSelectbox"] [data-baseweb="select"] input{{color:{TEXT}!impor
 @media(max-width:540px){{
     .live-page{{padding:0 .25rem 1.6rem;}}
     .section-heading{{font-size:1.12rem;}}
-    .leader-row{{
+    .st-key-leaderboard-titlebar{{--week-nav-width:150px;--week-nav-height:38px;--week-arrow-size:32px;--week-row-height:34px;grid-template-columns:minmax(0,1fr);justify-items:center;padding:.85rem 1rem .55rem!important;gap:.5rem!important;}}
+    .st-key-leaderboard-titlebar > div:has(.leaderboard-season){{display:none;}}
+    .st-key-leaderboard-titlebar > div:has(.st-key-leaderboard-week-controls){{width:var(--week-nav-width)!important;}}
+    .week-nav-label{{font-size:.94rem;}}
+    .leader-summary{{
         position:relative;
         grid-template-columns:repeat(2,minmax(0,1fr));
         grid-template-areas:
             "team team"
-            "score move"
+            "score status"
             "gini roster"
-            "wins status"
-            "quad quad";
+            "wins record";
         gap:.58rem;
         padding:.78rem;
     }}
@@ -3945,7 +4072,7 @@ div[data-testid="stSelectbox"] [data-baseweb="select"] input{{color:{TEXT}!impor
     .team-cell{{padding-left:52px;min-height:44px;}}
     .row-logo-wrap{{width:42px;height:42px;flex-basis:42px;}}
     .row-logo,.team-logo{{max-width:41px;max-height:41px;}}
-    .score-cell,.mini-cell,.move-cell,.status-pill,.quad-cell{{
+    .score-cell,.mini-cell,.status-pill,.record-cell{{
         box-sizing:border-box;
         width:100%;
         min-height:54px;
@@ -3954,10 +4081,12 @@ div[data-testid="stSelectbox"] [data-baseweb="select"] input{{color:{TEXT}!impor
         background:rgba(248,250,252,.92);
         border:1px solid rgba(15,23,42,.07);
     }}
-    .score-cell,.mini-cell,.move-cell{{display:flex;flex-direction:column;justify-content:center;}}
+    .score-cell,.mini-cell{{display:flex;flex-direction:column;justify-content:center;}}
     .status-pill{{justify-self:stretch;white-space:normal;text-align:center;}}
-    .quad-cell{{min-height:58px;}}
-    .quad-cell b{{white-space:normal;}}
+    .record-cell{{min-height:58px;}}
+    .record-cell b{{white-space:normal;}}
+    .history-chevron{{position:absolute;right:.78rem;top:.82rem;}}
+    .history-grid{{grid-auto-columns:minmax(132px,78vw);}}
     .detail-header{{align-items:flex-start;}}
     .detail-logo-wrap{{width:58px;height:58px;flex-basis:58px;}}
     .detail-logo{{max-width:56px;max-height:56px;}}
@@ -3968,7 +4097,7 @@ div[data-testid="stSelectbox"] [data-baseweb="select"] input{{color:{TEXT}!impor
     .mover-item{{align-items:flex-start;}}
 }}
 @media(max-width:390px){{
-    .leader-row{{padding:.68rem;}}
+    .leader-summary{{padding:.68rem;}}
     .rank-cell{{top:.68rem;left:.68rem;}}
     .team-cell{{padding-left:50px;}}
     .team-name{{font-size:.91rem;}}
@@ -3997,7 +4126,20 @@ live_source_refresh_message = str(
     recorded_refresh_status.get("message", "No authoritative current-season refresh is recorded.")
 )
 
-payload = build_live_leaderboard_payload(file_signature)
+replay_key = os.getenv("LIVE_LEADERBOARD_REPLAY_WEEK", "")
+replay_period = parse_week_key(replay_key) if replay_key else None
+if replay_key and replay_period is None:
+    raise ValueError("LIVE_LEADERBOARD_REPLAY_WEEK must be YYYY-Week-NN.")
+payload = build_live_leaderboard_payload(
+    file_signature,
+    replay_season=replay_period[0] if replay_period else None,
+    replay_week=replay_period[1] if replay_period else None,
+)
+if replay_period:
+    # The offline backfill driver reads this payload via AppTest. Stop before
+    # any daily/weekly history writes or public rendering can run.
+    st.session_state["live_leaderboard_replay_payload"] = payload
+    st.stop()
 print(f"Live Leaderboard payload timings (cached or rebuilt): {payload.get('build_timings', {})}")
 
 leaderboard = payload["leaderboard"]
@@ -4023,32 +4165,56 @@ if payload.get("team_season_empty") or leaderboard.empty:
     st.stop()
 
 weekly_snapshot_saved, weekly_snapshot_key = save_weekly_snapshot_if_needed(leaderboard, weekly_snapshot_key)
-weekly_movement_snapshot, has_snapshot = get_latest_weekly_movement_snapshot(weekly_snapshot_key)
-if has_snapshot and not comparable_ranked_populations(leaderboard, weekly_movement_snapshot):
-    weekly_movement_snapshot = pd.DataFrame()
-    has_snapshot = False
-leaderboard = calculate_weekly_movement(leaderboard, weekly_movement_snapshot)
 leaderboard["status_label"] = leaderboard.apply(generate_status_label, axis=1)
 save_live_snapshot(leaderboard, weekly_snapshot_key)
+
+weekly_history, _ = load_weekly_history()
+reconstructed_history, _ = safe_read_csv(DATA_DIR / "live_leaderboard_reconstructed_history.csv") if (DATA_DIR / "live_leaderboard_reconstructed_history.csv").exists() else (pd.DataFrame(), "")
+weekly_history = combine_recorded_and_reconstructed(weekly_history, reconstructed_history)
+team_game = initial_data.get("team_game", pd.DataFrame())
+team_history = build_team_history(
+    weekly_history,
+    leaderboard,
+    team_game,
+    selected_season,
+    weekly_snapshot_key,
+)
+
+snapshot_keys = [
+    key for key in available_snapshot_keys(weekly_history, selected_season)
+    if str(key) != str(weekly_snapshot_key)
+]
+ordered_period_keys = [weekly_snapshot_key] + snapshot_keys
+requested_period_key = str(st.query_params.get("leaderboard_week", weekly_snapshot_key))
+selected_period_key = requested_period_key if requested_period_key in ordered_period_keys else weekly_snapshot_key
+selected_snapshot_key = None if selected_period_key == weekly_snapshot_key else selected_period_key
+if selected_snapshot_key:
+    displayed_leaderboard = snapshot_leaderboard(
+        weekly_history,
+        selected_snapshot_key,
+        leaderboard,
+        team_game,
+        selected_season,
+    )
+    displayed_leaderboard["status_label"] = displayed_leaderboard.apply(generate_status_label, axis=1)
+    displayed_period = week_label(selected_snapshot_key)
+    leaderboard_heading = displayed_period
+else:
+    displayed_leaderboard = leaderboard
+    displayed_period = weekly_snapshot_period
+    leaderboard_heading = "Current"
 
 st.markdown('<div class="live-page">', unsafe_allow_html=True)
 
 render_start = perf_counter()
 
-render_live_status_strip(
-    selected_season,
-    weekly_snapshot_period,
-    leaderboard,
-    has_snapshot,
+render_leaderboard(
+    displayed_leaderboard,
+    team_history,
+    leaderboard_heading,
+    selected_period_key,
+    ordered_period_keys,
 )
-
-# Keep technical data-source details out of the public top section.
-# They are shown later in the bottom details expander.
-# render_source_status_card(nflreadpy_available, future_sources, roster_file, production_found)
-
-render_leaderboard(leaderboard)
-render_biggest_movers(leaderboard, has_snapshot)
-st.markdown('<div class="section-heading">Team Detail</div>', unsafe_allow_html=True)
 render_team_detail(leaderboard, production_found)
 # render_free_data_source_plan(performance_season, nflreadpy_available)
 st.markdown("</div>", unsafe_allow_html=True)
