@@ -3081,14 +3081,15 @@ def render_leaderboard(
         # can be intercepted by the host browser and open an additional tab.
         st.query_params["leaderboard_week"] = snapshot_key
 
-    with st.container(key="leaderboard-titlebar", horizontal=True, wrap=False, vertical_alignment="center"):
+    # Scoped CSS controls wrapping; Streamlit 1.58 does not accept a wrap keyword.
+    with st.container(key="leaderboard-titlebar", horizontal=True, vertical_alignment="center"):
         st.markdown(
             '<div id="leaderboard" class="section-heading leaderboard-heading">'
             f'{escape(view_label)} Leaderboard</div>',
             unsafe_allow_html=True,
             width="stretch",
         )
-        with st.container(key="leaderboard-week-controls", width="content", horizontal=True, wrap=False, gap=None, vertical_alignment="center"):
+        with st.container(key="leaderboard-week-controls", width="content", horizontal=True, gap=None, vertical_alignment="center"):
             st.button(
                 "Previous week", icon=":material/chevron_left:", key="leaderboard-week-back",
                 help="View the previous leaderboard week" if older_key else "Earliest available week",
@@ -3189,7 +3190,7 @@ def roster_strengths(row):
 
 def render_team_detail(leaderboard, production_found):
     labels = [f"#{int(row.live_rank)} {row.team_name} ({row.team})" for row in leaderboard.itertuples()]
-    with st.container(key="team-detail-toolbar", horizontal=True, wrap=False, vertical_alignment="center"):
+    with st.container(key="team-detail-toolbar", horizontal=True, vertical_alignment="center"):
         st.markdown(
             '<div class="section-heading detail-section-heading">Current Team Detail</div>',
             unsafe_allow_html=True, width="stretch",
