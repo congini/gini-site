@@ -1,8 +1,8 @@
 {
   "refresh_pipeline_version": 4,
-  "pipeline_attempt_time": "2026-10-27T10:17:12.259106-04:00",
-  "refresh_time": "2026-10-27T10:17:12.259106-04:00",
-  "last_successful_refresh_time": "2026-10-27T10:17:18.671188-04:00",
+  "pipeline_attempt_time": "2026-10-27T11:34:18.001586-04:00",
+  "refresh_time": "2026-10-27T11:34:18.001586-04:00",
+  "last_successful_refresh_time": "2026-10-27T11:34:25.240205-04:00",
   "ok": true,
   "complete": true,
   "attempted": true,
@@ -64,7 +64,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/weekly_rosters.csv",
       "rows": 19829,
       "season": 2026,
-      "modified_time": "2026-10-27T10:17:13.816107-04:00",
+      "modified_time": "2026-10-27T11:34:19.631288-04:00",
       "error": "",
       "attempts": []
     },
@@ -74,7 +74,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/player_season_stats.csv",
       "rows": 7447,
       "season": 2026,
-      "modified_time": "2026-10-27T10:17:14.005099-04:00",
+      "modified_time": "2026-10-27T11:34:19.846289-04:00",
       "error": "",
       "attempts": []
     },
@@ -84,7 +84,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/player_prior_season_stats.csv",
       "rows": 2020,
       "season": 2025,
-      "modified_time": "2026-10-27T10:17:14.251087-04:00",
+      "modified_time": "2026-10-27T11:34:20.031289-04:00",
       "error": "",
       "attempts": []
     },
@@ -94,7 +94,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/players.csv",
       "rows": 24861,
       "season": null,
-      "modified_time": "2026-10-27T10:17:14.505075-04:00",
+      "modified_time": "2026-10-27T11:34:20.403290-04:00",
       "error": "",
       "attempts": []
     },
@@ -104,7 +104,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/snap_counts.csv",
       "rows": 9981,
       "season": 2026,
-      "modified_time": "2026-10-27T10:17:14.693066-04:00",
+      "modified_time": "2026-10-27T11:34:20.580290-04:00",
       "error": "",
       "attempts": []
     },
@@ -114,7 +114,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/injuries.csv",
       "rows": 2139,
       "season": 2026,
-      "modified_time": "2026-10-27T10:17:14.807061-04:00",
+      "modified_time": "2026-10-27T11:34:20.702291-04:00",
       "error": "",
       "attempts": []
     },
@@ -124,7 +124,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/draft_picks.csv",
       "rows": 257,
       "season": 2026,
-      "modified_time": "2026-10-27T10:17:14.933055-04:00",
+      "modified_time": "2026-10-27T11:34:20.817291-04:00",
       "error": "",
       "attempts": []
     },
@@ -134,7 +134,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/contracts.csv",
       "rows": 2539,
       "season": null,
-      "modified_time": "2026-10-27T10:17:16.795967-04:00",
+      "modified_time": "2026-10-27T11:34:23.211296-04:00",
       "error": "",
       "attempts": []
     },
@@ -144,7 +144,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/depth_charts.csv",
       "rows": 707893,
       "season": 2026,
-      "modified_time": "2026-10-27T10:17:18.375892-04:00",
+      "modified_time": "2026-10-27T11:34:25.090299-04:00",
       "error": "",
       "attempts": []
     },
@@ -154,7 +154,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/schedules.csv",
       "rows": 272,
       "season": 2026,
-      "modified_time": "2026-10-27T10:17:18.629880-04:00",
+      "modified_time": "2026-10-27T11:34:25.119299-04:00",
       "error": "",
       "attempts": []
     },
@@ -164,7 +164,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/teams.csv",
       "rows": 36,
       "season": null,
-      "modified_time": "2026-10-27T10:17:18.669878-04:00",
+      "modified_time": "2026-10-27T11:34:25.238299-04:00",
       "error": "",
       "attempts": []
     }
