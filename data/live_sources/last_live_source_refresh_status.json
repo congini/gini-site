@@ -1,8 +1,8 @@
 {
   "refresh_pipeline_version": 4,
-  "pipeline_attempt_time": "2026-11-09T11:21:43.865173-05:00",
-  "refresh_time": "2026-11-09T11:21:43.865173-05:00",
-  "last_successful_refresh_time": "2026-11-09T11:21:52.341818-05:00",
+  "pipeline_attempt_time": "2026-11-10T13:17:24.262855-05:00",
+  "refresh_time": "2026-11-10T13:17:24.262855-05:00",
+  "last_successful_refresh_time": "2026-11-10T13:17:29.490783-05:00",
   "ok": true,
   "complete": true,
   "attempted": true,
@@ -10,13 +10,13 @@
   "selected_season": 2026,
   "current_season": 2026,
   "reason": "Manual refresh forced.",
-  "message": "Authoritative 2026 refresh succeeded through Week 9 (135 completed regular-season games; 23647 PBP rows). Updated live source CSVs: weekly_rosters.csv, player_season_stats.csv, player_prior_season_stats.csv, players.csv, snap_counts.csv, injuries.csv, draft_picks.csv, contracts.csv, depth_charts.csv, schedules.csv, teams.csv.",
-  "daily_refresh_due_time": "2026-11-08T23:59:00-05:00",
-  "next_daily_refresh_due_time": "2026-11-09T23:59:00-05:00",
+  "message": "Authoritative 2026 refresh succeeded through Week 9 (136 completed regular-season games; 23822 PBP rows). Updated live source CSVs: weekly_rosters.csv, player_season_stats.csv, player_prior_season_stats.csv, players.csv, snap_counts.csv, injuries.csv, draft_picks.csv, contracts.csv, depth_charts.csv, schedules.csv, teams.csv.",
+  "daily_refresh_due_time": "2026-11-09T23:59:00-05:00",
+  "next_daily_refresh_due_time": "2026-11-10T23:59:00-05:00",
   "steps": {
     "pbp_download": {
       "ok": true,
-      "rows": 23647,
+      "rows": 23822,
       "source": "nflreadpy"
     },
     "schedule_results_download": {
@@ -26,7 +26,7 @@
     },
     "gini_team_game_rebuild": {
       "ok": true,
-      "rows": 270
+      "rows": 272
     },
     "gini_team_season_rebuild": {
       "ok": true,
@@ -62,9 +62,9 @@
       "ok": true,
       "file": "weekly_rosters.csv",
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/weekly_rosters.csv",
-      "rows": 22285,
+      "rows": 24538,
       "season": 2026,
-      "modified_time": "2026-11-09T11:21:46.108999-05:00",
+      "modified_time": "2026-11-10T13:17:25.478018-05:00",
       "error": "",
       "attempts": []
     },
@@ -72,9 +72,9 @@
       "ok": true,
       "file": "player_season_stats.csv",
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/player_season_stats.csv",
-      "rows": 9393,
+      "rows": 9464,
       "season": 2026,
-      "modified_time": "2026-11-09T11:21:46.477000-05:00",
+      "modified_time": "2026-11-10T13:17:25.648017-05:00",
       "error": "",
       "attempts": []
     },
@@ -84,7 +84,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/player_prior_season_stats.csv",
       "rows": 2020,
       "season": 2025,
-      "modified_time": "2026-11-09T11:21:46.659000-05:00",
+      "modified_time": "2026-11-10T13:17:25.777017-05:00",
       "error": "",
       "attempts": []
     },
@@ -94,7 +94,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/players.csv",
       "rows": 24867,
       "season": null,
-      "modified_time": "2026-11-09T11:21:47.130002-05:00",
+      "modified_time": "2026-11-10T13:17:25.979016-05:00",
       "error": "",
       "attempts": []
     },
@@ -102,9 +102,9 @@
       "ok": true,
       "file": "snap_counts.csv",
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/snap_counts.csv",
-      "rows": 12597,
+      "rows": 12693,
       "season": 2026,
-      "modified_time": "2026-11-09T11:21:47.339002-05:00",
+      "modified_time": "2026-11-10T13:17:26.056015-05:00",
       "error": "",
       "attempts": []
     },
@@ -114,7 +114,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/injuries.csv",
       "rows": 2821,
       "season": 2026,
-      "modified_time": "2026-11-09T11:21:47.512002-05:00",
+      "modified_time": "2026-11-10T13:17:26.179015-05:00",
       "error": "",
       "attempts": []
     },
@@ -124,7 +124,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/draft_picks.csv",
       "rows": 257,
       "season": 2026,
-      "modified_time": "2026-11-09T11:21:47.692003-05:00",
+      "modified_time": "2026-11-10T13:17:26.308014-05:00",
       "error": "",
       "attempts": []
     },
@@ -132,9 +132,9 @@
       "ok": true,
       "file": "contracts.csv",
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/contracts.csv",
-      "rows": 2544,
+      "rows": 2498,
       "season": null,
-      "modified_time": "2026-11-09T11:21:50.223046-05:00",
+      "modified_time": "2026-11-10T13:17:27.903006-05:00",
       "error": "",
       "attempts": []
     },
@@ -142,9 +142,9 @@
       "ok": true,
       "file": "depth_charts.csv",
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/depth_charts.csv",
-      "rows": 766149,
+      "rows": 773170,
       "season": 2026,
-      "modified_time": "2026-11-09T11:21:52.149065-05:00",
+      "modified_time": "2026-11-10T13:17:29.105964-05:00",
       "error": "",
       "attempts": []
     },
@@ -154,7 +154,7 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/schedules.csv",
       "rows": 272,
       "season": 2026,
-      "modified_time": "2026-11-09T11:21:52.180065-05:00",
+      "modified_time": "2026-11-10T13:17:29.444940-05:00",
       "error": "",
       "attempts": []
     },
@@ -164,19 +164,19 @@
       "path": "/home/runner/work/gini-site/gini-site/data/live_sources/teams.csv",
       "rows": 36,
       "season": null,
-      "modified_time": "2026-11-09T11:21:52.341066-05:00",
+      "modified_time": "2026-11-10T13:17:29.490397-05:00",
       "error": "",
       "attempts": []
     }
   },
   "data_through_week": 9,
-  "latest_completed_game_date": "2026-11-08",
-  "completed_regular_season_game_count": 135,
+  "latest_completed_game_date": "2026-11-09",
+  "completed_regular_season_game_count": 136,
   "updated_any": true,
-  "pbp_row_count": 23647,
-  "current_season_team_game_rows": 270,
+  "pbp_row_count": 23822,
+  "current_season_team_game_rows": 272,
   "current_season_team_season_rows": 32,
   "regular_season_complete": false,
-  "regular_season_completion_message": "135 of 272 regular-season games have final scores.",
+  "regular_season_completion_message": "136 of 272 regular-season games have final scores.",
   "historical_data_unchanged": true
 }
